@@ -85,3 +85,19 @@ uv run uvicorn app.main:app--reload
 | pytest | 테스트 |
 | pytest-asyncio | 비동기 API 테스트 |
 | ruff | Python Lint / Format |
+
+## Commit 메시지 규칙
+| **타입**       | **설명**                          |
+|----------------|-----------------------------------|
+| feat         | 	새로운 기능 추가                  |
+| fix | 버그 수정                         |
+| docs           | 문서 수정                         |
+|style| 코드 스타일 수정 (기능 변경 없음) |
+| refactor         | 	코드 구조 개선                    |
+| test | 테스트 코드 추가                  |
+| chore           | 기타 작업 (빌드 설정 등)          |
+
+## 브랜치명 규칙
+1. 이슈를 만든다. 
+2. `<해당 브랜치 기능>/#<이슈번호>/<간단한기능설명단어>`
+ex) feat/#1/brand_identity
