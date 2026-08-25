@@ -1,1 +1,87 @@
 # ai-landing-page-generater-server
+
+## 실행 방법
+### 1. uv가 설치되어 있는지 확인
+
+
+```
+uv--version
+```
+
+### (설치되어있지 않을 경우) 1-2. uv 설치
+
+hombrew:
+```
+brew install uv
+```
+
+또는 uv 공식 설치 방식:
+
+```
+curl-LsSf https://astral.sh/uv/install.sh |sh
+```
+
+
+### 2. 프로젝트 의존성 설치
+
+```
+uv sync
+```
+
+실행.
+
+**명령어 역할**
+
+① `.venv` 생성
+
+없으면:
+
+```
+.venv/
+```
+
+자동 생성
+-> 따로 가상 환경 설치할 필요 없음. 
+
+② `uv.lock` 확인
+
+③ 패키지 설치
+
+
+### 3. FastAPI 서버 실행
+
+```
+uv run uvicorn app.main:app--reload
+```
+
+## 버전 정보
+개발 환경 및 버전
+
+### Runtime
+
+| 항목 | 버전 |
+| --- | --- |
+| Python | 3.10.20 |
+| uv | `uv --version`으로 확인 |
+| FastAPI | >= 0.141.1 |
+| Uvicorn | >= 0.52.4 |
+
+### 주요 Dependencies
+
+| Library | Version | 용도 |
+| --- | --- | --- |
+| fastapi | >= 0.141.1 | REST API 서버 |
+| uvicorn | >= 0.52.4 | ASGI 서버 |
+| pydantic-settings | >= 2.15.0 | 환경 변수 및 설정 관리 |
+| python-multipart | >= 0.0.32 | PDF 등 파일 업로드 |
+| pymupdf | uv.lock 기준 | PDF 파싱 |
+| httpx | uv.lock 기준 | 외부 API / AI API 호출 |
+| tenacity | uv.lock 기준 | API 호출 재시도 처리 |
+
+### Development Dependencies
+
+| Library | 용도 |
+| --- | --- |
+| pytest | 테스트 |
+| pytest-asyncio | 비동기 API 테스트 |
+| ruff | Python Lint / Format |

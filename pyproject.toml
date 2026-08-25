@@ -1,0 +1,40 @@
+[project]
+name = "ai-landing-page-generater-server"
+version = "0.1.0"
+description = "AI-powered persona-based landing page generator backend"
+readme = "README.md"
+authors = [
+    { name = "siro", email = "siro.lee@cheilpengtai.com" }
+]
+requires-python = ">=3.10"
+
+dependencies = [
+    # Web API
+    "fastapi>=0.141.1",
+    "uvicorn>=0.52.4",
+
+    # File upload (multipart/form-data)
+    "python-multipart>=0.0.32",
+
+    # Environment variables / settings
+    "pydantic-settings>=2.15.0",
+
+    # PDF parsing
+    "pymupdf",
+
+    # External AI/API requests
+    "httpx",
+
+    # Retry logic for AI/API calls
+    "tenacity",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "ruff",
+]
+
+[tool.uv]
+package = false

@@ -1,0 +1,23 @@
+# Virtual Environment
+.venv/
+
+# Environment variables
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+
+# IDE
+.idea/
+.vscode/
+
+# macOS
+.DS_Store
+
+# Runtime files
+storage/uploads/*
+storage/generated/*
+
+!storage/uploads/.gitkeep
+!storage/generated/.gitkeep
