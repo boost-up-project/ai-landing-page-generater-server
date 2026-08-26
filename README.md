@@ -51,7 +51,7 @@ uv sync
 ### 3. FastAPI 서버 실행
 
 ```
-uv run uvicorn app.main:app--reload
+uv run uvicorn app.main:app --reload
 ```
 
 ## 버전 정보
@@ -101,3 +101,22 @@ uv run uvicorn app.main:app--reload
 1. 이슈를 만든다. 
 2. `<해당 브랜치 기능>/#<이슈번호>/<간단한기능설명단어>`
 ex) feat/#1/brand_identity
+
+## 백엔드 구조
+
+백엔드는 기술 계층이 아니라 도메인을 기준으로 구성한다.
+
+```text
+app/
+├── brand/       # 브랜드 분석 API, 스키마, 서비스, 프롬프트, MD 템플릿
+├── campaign/    # 캠페인 생성 도메인
+├── persona/     # 페르소나 생성 도메인
+├── common/      # 도메인 공통 기능(PDF 파싱 등)
+├── core/        # 설정 및 애플리케이션 전역 관심사
+└── workflows/   # brand → campaign → persona 같은 전체 흐름 조정
+```
+
+Gemini가 반환하는 값은 Pydantic 스키마로 검증한 후 각 도메인의 고정 Markdown
+템플릿으로 렌더링한다. 기획 출력 명세는 `docs/output-specs/`에서 관리한다.
+`GEMINI.md`는 Gemini CLI가 참고하는 개발 규칙이며 런타임 프롬프트나 결과
+템플릿을 저장하는 곳으로 사용하지 않는다.

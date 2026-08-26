@@ -1,0 +1,1 @@
+"""Campaign generation domain."""
