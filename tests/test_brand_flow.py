@@ -172,3 +172,19 @@ def test_analyze_api_returns_fixed_review_structure(tmp_path: Path) -> None:
     assert len(body["data"]["brand_identity"]) == 5
     assert len(body["data"]["verbal_guideline"]) == 6
     assert len(body["data"]["visual_guideline"]) == 4
+
+
+def test_local_frontend_origin_is_allowed() -> None:
+    with TestClient(app) as client:
+        response = client.options(
+            "/api/brands/analyze",
+            headers={
+                "Origin": "http://127.0.0.1:5500",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == (
+        "http://127.0.0.1:5500"
+    )

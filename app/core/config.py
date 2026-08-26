@@ -16,6 +16,13 @@ class Settings(BaseSettings):
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
     gemini_timeout_seconds: float = 180.0
 
+    cors_origins: list[str] = [
+        "http://127.0.0.1:5500",
+        "http://localhost:5500",
+        "http://127.0.0.1:8001",
+        "http://localhost:8001",
+    ]
+
     storage_root: Path = Path("storage")
     max_pdf_files: int = 10
     max_pdf_size_bytes: int = 20 * 1024 * 1024
