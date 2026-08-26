@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 
 from app.brand.ai_parser import AIParserError
 from app.brand.schemas import (
@@ -15,6 +15,7 @@ from app.brand.service import (
     BrandService,
     BrandStateError,
     UploadedDocument,
+    UploadedVisualAsset,
 )
 from app.common.pdf import PDFParseError
 from app.core.config import Settings, get_settings
@@ -36,6 +37,10 @@ def get_brand_service(
 async def analyze_brand(
     files: Annotated[list[UploadFile], File()],
     service: Annotated[BrandService, Depends(get_brand_service)],
+    logo_files: Annotated[list[UploadFile] | None, File()] = None,
+    icon_files: Annotated[list[UploadFile] | None, File()] = None,
+    font_files: Annotated[list[UploadFile] | None, File()] = None,
+    colors: Annotated[list[str] | None, Form()] = None,
 ) -> BrandAnalysisResponse:
     uploaded_documents: list[UploadedDocument] = []
     for file in files:
@@ -49,8 +54,27 @@ async def analyze_brand(
             UploadedDocument(filename=filename, data=await file.read())
         )
 
+    uploaded_visual_assets: list[UploadedVisualAsset] = []
+    for kind, visual_files in (
+        ("logo", logo_files or []),
+        ("icon", icon_files or []),
+        ("font", font_files or []),
+    ):
+        for file in visual_files:
+            uploaded_visual_assets.append(
+                UploadedVisualAsset(
+                    kind=kind,
+                    filename=file.filename or f"{kind}-asset",
+                    data=await file.read(),
+                )
+            )
+
     try:
-        return await service.analyze(uploaded_documents)
+        return await service.analyze(
+            uploaded_documents,
+            visual_assets=uploaded_visual_assets,
+            colors=colors or [],
+        )
     except (ValueError, PDFParseError) as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     max_pdf_size_bytes: int = 20 * 1024 * 1024
     max_pdf_pages: int = 200
     max_extracted_characters: int = 300_000
+    max_visual_asset_files: int = 20
+    max_visual_asset_size_bytes: int = 20 * 1024 * 1024
 
 
 @lru_cache

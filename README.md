@@ -120,3 +120,18 @@ Gemini가 반환하는 값은 Pydantic 스키마로 검증한 후 각 도메인�
 템플릿으로 렌더링한다. 기획 출력 명세는 `docs/output-specs/`에서 관리한다.
 `GEMINI.md`는 Gemini CLI가 참고하는 개발 규칙이며 런타임 프롬프트나 결과
 템플릿을 저장하는 곳으로 사용하지 않는다.
+
+## 브랜드 분석 입력
+
+`POST /api/brands/analyze`는 `multipart/form-data`로 다음 필드를 받는다.
+
+| 필드 | 형식 | 필수 여부 |
+| --- | --- | --- |
+| `files` | PDF, 최대 10개 | 한 개 이상 필수 |
+| `logo_files` | SVG, PNG, JPG, JPEG | 선택 |
+| `icon_files` | SVG, PNG, JPG, JPEG | 선택 |
+| `font_files` | TTF | 선택 |
+| `colors` | `#RRGGBB` 또는 `#RGB` 문자열 | 선택 |
+
+시각 자산은 합쳐서 최대 20개까지 업로드할 수 있다. 직접 업로드한 자산명과
+정규화된 색상값은 Gemini가 분석한 Visual Guideline에 합쳐진다.

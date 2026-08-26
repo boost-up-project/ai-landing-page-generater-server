@@ -19,6 +19,17 @@
 내용이 있으면 근거가 반드시 하나 이상 있어야 하며, 내용이 없으면 근거도
 비어 있어야 한다.
 
+로고·아이콘 이미지, TTF 폰트, 사용자가 직접 입력한 HEX 색상은 PDF 분석과
+별도로 서버가 검증하고 Visual Guideline에 합친다. 이 직접 입력값은 PDF 페이지
+근거 없이도 저장할 수 있다.
+
+## 직접 입력 형식
+
+- Logo: SVG, PNG, JPG, JPEG
+- Icon: SVG, PNG, JPG, JPEG
+- Fonts: TTF
+- Color: `#RRGGBB` 또는 축약형 `#RGB` (`#RRGGBB`로 정규화)
+
 ## 고정 출력 순서
 
 1. Brand Identity

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 from uuid import UUID, uuid4
 
 from app.brand.ai_parser import AIParserError, GeminiBrandParser
@@ -36,6 +36,16 @@ class UploadedDocument:
     data: bytes
 
 
+VisualAssetKind = Literal["logo", "icon", "font"]
+
+
+@dataclass(frozen=True)
+class UploadedVisualAsset:
+    kind: VisualAssetKind
+    filename: str
+    data: bytes
+
+
 class BrandService:
     def __init__(
         self,
@@ -46,13 +56,29 @@ class BrandService:
         self._parser = parser or GeminiBrandParser(settings)
 
     async def analyze(
-        self, uploaded_documents: list[UploadedDocument]
+        self,
+        uploaded_documents: list[UploadedDocument],
+        *,
+        visual_assets: list[UploadedVisualAsset] | None = None,
+        colors: list[str] | None = None,
     ) -> BrandAnalysisResponse:
+        visual_assets = visual_assets or []
+        normalized_colors = _normalize_hex_colors(colors or [])
         if not uploaded_documents:
             raise ValueError("At least one PDF is required")
         if len(uploaded_documents) > self._settings.max_pdf_files:
             raise ValueError(
                 f"A maximum of {self._settings.max_pdf_files} PDFs is allowed"
+            )
+        if len(visual_assets) > self._settings.max_visual_asset_files:
+            raise ValueError(
+                "A maximum of "
+                f"{self._settings.max_visual_asset_files} visual assets is allowed"
+            )
+        for asset in visual_assets:
+            _validate_visual_asset(
+                asset,
+                max_size_bytes=self._settings.max_visual_asset_size_bytes,
             )
 
         parsed = [
@@ -70,13 +96,16 @@ class BrandService:
         )
         data = await self._parser.analyze(extracted_text)
         _validate_source_references(data, parsed)
+        data = _merge_visual_inputs(data, visual_assets, normalized_colors)
 
         brand_id = str(uuid4())
         now = datetime.now(timezone.utc)
         record = BrandAnalysisResponse(
             brand_id=brand_id,
             status=BrandStatus.DRAFT,
-            source_files=[document.filename for document in uploaded_documents],
+            source_files=[
+                document.filename for document in uploaded_documents
+            ] + [asset.filename for asset in visual_assets],
             data=data,
             created_at=now,
             updated_at=now,
@@ -86,6 +115,12 @@ class BrandService:
         for index, document in enumerate(uploaded_documents, start=1):
             safe_name = _safe_filename(document.filename)
             _write_bytes(upload_dir / f"{index:02d}_{safe_name}", document.data)
+        for index, asset in enumerate(visual_assets, start=1):
+            safe_name = _safe_filename(asset.filename)
+            _write_bytes(
+                upload_dir / asset.kind / f"{index:02d}_{safe_name}",
+                asset.data,
+            )
 
         brand_dir = self._brand_dir(brand_id)
         _write_text(brand_dir / "extracted.txt", extracted_text)
@@ -182,6 +217,96 @@ def _safe_filename(filename: str) -> str:
         character if character.isalnum() or character in {".", "-", "_", " "} else "_"
         for character in name
     )
+
+
+def _normalize_hex_colors(colors: list[str]) -> list[str]:
+    normalized: list[str] = []
+    for value in colors:
+        candidate = value.strip().lstrip("#")
+        if len(candidate) == 3 and all(
+            character in "0123456789abcdefABCDEF" for character in candidate
+        ):
+            candidate = "".join(character * 2 for character in candidate)
+        if len(candidate) != 6 or not all(
+            character in "0123456789abcdefABCDEF" for character in candidate
+        ):
+            raise ValueError(f"Invalid HEX color: {value}")
+        color = f"#{candidate.upper()}"
+        if color not in normalized:
+            normalized.append(color)
+    return normalized
+
+
+def _validate_visual_asset(
+    asset: UploadedVisualAsset,
+    *,
+    max_size_bytes: int,
+) -> None:
+    if not asset.data:
+        raise ValueError(f"{asset.filename}: empty file")
+    if len(asset.data) > max_size_bytes:
+        raise ValueError(
+            f"{asset.filename}: file exceeds the {max_size_bytes}-byte limit"
+        )
+
+    suffix = Path(asset.filename).suffix.lower()
+    if asset.kind in {"logo", "icon"}:
+        if suffix not in {".svg", ".png", ".jpg", ".jpeg"}:
+            raise ValueError(
+                f"{asset.filename}: logo and icon files must be SVG, PNG, JPG, "
+                "or JPEG"
+            )
+        if suffix == ".svg" and b"<svg" not in asset.data[:1024].lower():
+            raise ValueError(f"{asset.filename}: file is not a valid SVG")
+        if suffix == ".png" and not asset.data.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise ValueError(f"{asset.filename}: file is not a valid PNG")
+        if suffix in {".jpg", ".jpeg"} and not asset.data.startswith(b"\xff\xd8\xff"):
+            raise ValueError(f"{asset.filename}: file is not a valid JPEG")
+        return
+
+    if suffix != ".ttf":
+        raise ValueError(f"{asset.filename}: typography files must be TTF")
+    if not (
+        asset.data.startswith(b"\x00\x01\x00\x00")
+        or asset.data.startswith(b"true")
+    ):
+        raise ValueError(f"{asset.filename}: file is not a valid TTF")
+
+
+def _merge_visual_inputs(
+    data: BrandKnowledge,
+    visual_assets: list[UploadedVisualAsset],
+    colors: list[str],
+) -> BrandKnowledge:
+    merged = data.model_copy(deep=True)
+    files_by_kind = {
+        kind: [asset.filename for asset in visual_assets if asset.kind == kind]
+        for kind in ("logo", "icon", "font")
+    }
+    additions = {
+        "logo": _asset_summary("Uploaded logo assets", files_by_kind["logo"]),
+        "icon": _asset_summary("Uploaded icon assets", files_by_kind["icon"]),
+        "fonts": _asset_summary("Uploaded typography assets", files_by_kind["font"]),
+        "color": f"Selected colors: {', '.join(colors)}" if colors else "",
+    }
+
+    for field_name, addition in additions.items():
+        if not addition:
+            continue
+        section = getattr(merged.visual_guideline, field_name)
+        combined = " / ".join(
+            part for part in (section.content.strip(), addition) if part
+        )
+        setattr(
+            merged.visual_guideline,
+            field_name,
+            section.model_copy(update={"content": combined}),
+        )
+    return merged
+
+
+def _asset_summary(label: str, filenames: list[str]) -> str:
+    return f"{label}: {', '.join(filenames)}" if filenames else ""
 
 
 def _validate_source_references(
