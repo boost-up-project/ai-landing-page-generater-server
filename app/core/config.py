@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     gemini_timeout_seconds: float = 180.0
 
     cors_origins: list[str] = [
+        "https://blanki.ynana.xyz",
         "http://127.0.0.1:5500",
         "http://localhost:5500",
         "http://127.0.0.1:8001",

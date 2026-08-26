@@ -163,3 +163,15 @@ uv run uvicorn app.main:app --reload
 - 상태 확인: `http://127.0.0.1:8000/health`
 
 서버를 종료할 때는 실행 중인 터미널에서 `Ctrl+C`를 누른다.
+
+## Coolify 배포
+
+프런트엔드 `https://blanki.ynana.xyz`의 브라우저 요청을 허용하도록 다음 환경변수를
+설정한다.
+
+```env
+CORS_ORIGINS=["https://blanki.ynana.xyz"]
+```
+
+로컬 프런트엔드도 함께 허용하려면 `.env.example`과 같이 로컬 origin을 목록에
+추가한다. 환경변수를 변경한 뒤에는 백엔드를 재배포한다.
