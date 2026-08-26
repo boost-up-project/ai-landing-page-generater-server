@@ -51,7 +51,7 @@ uv sync
 ### 3. FastAPI 서버 실행
 
 ```
-uv run uvicorn app.main:app--reload
+uv run uvicorn app.main:app --reload
 ```
 
 ## 버전 정보
@@ -101,3 +101,65 @@ uv run uvicorn app.main:app--reload
 1. 이슈를 만든다. 
 2. `<해당 브랜치 기능>/#<이슈번호>/<간단한기능설명단어>`
 ex) feat/#1/brand_identity
+
+## 백엔드 구조
+
+백엔드는 기술 계층이 아니라 도메인을 기준으로 구성한다.
+
+```text
+app/
+├── brand/       # 브랜드 분석 API, 스키마, 서비스, 프롬프트, MD 템플릿
+├── campaign/    # 캠페인 생성 도메인
+├── persona/     # 페르소나 생성 도메인
+├── common/      # 도메인 공통 기능(PDF 파싱 등)
+├── core/        # 설정 및 애플리케이션 전역 관심사
+└── workflows/   # brand → campaign → persona 같은 전체 흐름 조정
+```
+
+Gemini가 반환하는 값은 Pydantic 스키마로 검증한 후 각 도메인의 고정 Markdown
+템플릿으로 렌더링한다. 기획 출력 명세는 `docs/output-specs/`에서 관리한다.
+`GEMINI.md`는 Gemini CLI가 참고하는 개발 규칙이며 런타임 프롬프트나 결과
+템플릿을 저장하는 곳으로 사용하지 않는다.
+
+## 브랜드 분석 입력
+
+`POST /api/brands/analyze`는 `multipart/form-data`로 다음 필드를 받는다.
+
+| 필드 | 형식 | 필수 여부 |
+| --- | --- | --- |
+| `files` | PDF, 최대 10개 | 한 개 이상 필수 |
+| `logo_files` | SVG, PNG, JPG, JPEG | 선택 |
+| `icon_files` | SVG, PNG, JPG, JPEG | 선택 |
+| `font_files` | TTF | 선택 |
+| `colors` | `#RRGGBB` 또는 `#RGB` 문자열 | 선택 |
+
+시각 자산은 합쳐서 최대 20개까지 업로드할 수 있다. 직접 업로드한 자산명과
+정규화된 색상값은 Gemini가 분석한 Visual Guideline에 합쳐진다.
+
+## 백엔드 실행 방법
+
+백엔드 저장소 루트에서 실행한다. 처음 실행할 때 의존성을 설치한다.
+
+```bash
+uv sync
+```
+
+`.env` 파일이 없다면 `.env.example`을 복사하고 `GEMINI_API_KEY`에 실제 키를
+입력한다.
+
+```bash
+cp .env.example .env
+```
+
+FastAPI 서버를 실행한다.
+
+```bash
+uv run uvicorn app.main:app --reload
+```
+
+실행 후 다음 주소에서 확인할 수 있다.
+
+- API 문서: `http://127.0.0.1:8000/docs`
+- 상태 확인: `http://127.0.0.1:8000/health`
+
+서버를 종료할 때는 실행 중인 터미널에서 `Ctrl+C`를 누른다.
