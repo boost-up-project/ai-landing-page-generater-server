@@ -135,3 +135,31 @@ Gemini가 반환하는 값은 Pydantic 스키마로 검증한 후 각 도메인�
 
 시각 자산은 합쳐서 최대 20개까지 업로드할 수 있다. 직접 업로드한 자산명과
 정규화된 색상값은 Gemini가 분석한 Visual Guideline에 합쳐진다.
+
+## 백엔드 실행 방법
+
+백엔드 저장소 루트에서 실행한다. 처음 실행할 때 의존성을 설치한다.
+
+```bash
+uv sync
+```
+
+`.env` 파일이 없다면 `.env.example`을 복사하고 `GEMINI_API_KEY`에 실제 키를
+입력한다.
+
+```bash
+cp .env.example .env
+```
+
+FastAPI 서버를 실행한다.
+
+```bash
+uv run uvicorn app.main:app --reload
+```
+
+실행 후 다음 주소에서 확인할 수 있다.
+
+- API 문서: `http://127.0.0.1:8000/docs`
+- 상태 확인: `http://127.0.0.1:8000/health`
+
+서버를 종료할 때는 실행 중인 터미널에서 `Ctrl+C`를 누른다.
