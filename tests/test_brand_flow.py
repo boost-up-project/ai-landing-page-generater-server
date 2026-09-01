@@ -108,10 +108,11 @@ async def test_brand_service_review_and_finalize_flow(tmp_path: Path) -> None:
     )
 
     assert analyzed.status == BrandStatus.DRAFT
+    assert analyzed.project_id
     assert "[SOURCE_FILE: brand.pdf]" in fake_parser.extracted_text
     assert "[SOURCE_PAGE: 1]" in fake_parser.extracted_text
     assert (
-        tmp_path / "generated" / "brands" / analyzed.brand_id / "analyzed.json"
+        tmp_path / "projects" / analyzed.project_id / "brand" / "analyzed.json"
     ).is_file()
 
     with pytest.raises(BrandStateError):
@@ -125,6 +126,8 @@ async def test_brand_service_review_and_finalize_flow(tmp_path: Path) -> None:
 
     finalized = service.finalize(analyzed.brand_id)
     assert finalized.status == BrandStatus.FINALIZED
+    assert finalized.project_id == analyzed.project_id
+    assert finalized.next_route == "/#campaign-input"
     assert "### 01. Brand Overview" in finalized.markdown
     assert "Brand name: Reviewed Example" in finalized.markdown
     assert "## 02. Verbal Guideline" in finalized.markdown
@@ -166,6 +169,7 @@ def test_analyze_api_returns_fixed_review_structure(tmp_path: Path) -> None:
     assert response.status_code == 201
     body = response.json()
     assert body["status"] == "draft"
+    assert body["project_id"]
     assert set(body["data"]) == {
         "brand_identity",
         "verbal_guideline",
@@ -239,7 +243,7 @@ async def test_brand_service_merges_and_stores_visual_inputs(tmp_path: Path) -> 
     assert "app-icon.jpeg" in visual.icon.content
     assert "brand.ttf" in visual.fonts.content
     assert "#1F4D3A, #D8C3A5" in visual.color.content
-    upload_root = tmp_path / "uploads" / analyzed.brand_id
+    upload_root = tmp_path / "projects" / analyzed.project_id / "brand" / "uploads"
     assert (upload_root / "logo" / "01_wordmark.svg").is_file()
     assert (upload_root / "logo" / "02_wordmark.jpg").is_file()
     assert (upload_root / "icon" / "03_app-icon.png").is_file()

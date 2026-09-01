@@ -16,6 +16,7 @@ from app.campaign.schemas import (
 from app.campaign.service import CampaignService, UploadedFile
 from app.core.config import Settings
 from app.main import app
+from app.project.service import create_project_id, project_dir
 
 
 def make_section(content: str = "", filename: str = "strategy.pdf") -> CampaignSection:
@@ -60,12 +61,21 @@ class FakeCampaignParser:
         return self.result
 
 
+def make_project(settings: Settings) -> str:
+    project_id = create_project_id()
+    project_dir(settings, project_id).mkdir(parents=True)
+    return project_id
+
+
 @pytest.mark.asyncio
 async def test_campaign_service_stores_files_and_creates_draft(tmp_path: Path) -> None:
     parser = FakeCampaignParser(make_campaign_knowledge())
-    service = CampaignService(Settings(storage_root=tmp_path), parser=parser)
+    settings = Settings(storage_root=tmp_path)
+    project_id = make_project(settings)
+    service = CampaignService(settings, parser=parser)
 
     result = await service.analyze(
+        project_id,
         UploadedFile("strategy.pdf", make_pdf_bytes()),
         component_files=[
             UploadedFile("hero.html", b"<section>Hero</section>"),
@@ -76,24 +86,29 @@ async def test_campaign_service_stores_files_and_creates_draft(tmp_path: Path) -
     )
 
     assert result.status == CampaignStatus.DRAFT
+    assert result.project_id == project_id
     assert result.source_checksum
     assert result.reused_from_campaign_id is None
     assert "[SOURCE_FILE: strategy.pdf]" in parser.extracted_text
     assert parser.calls == 1
-    root = tmp_path / "generated" / "campaigns" / result.campaign_id
+    root = tmp_path / "projects" / project_id / "campaign"
     assert (root / "component" / "01_hero.html").read_text() == (
         "<section>Hero</section>"
     )
     assert (root / "assets" / "01_hero.png").is_file()
-    assert (tmp_path / "uploads" / result.campaign_id / "strategy.pdf").is_file()
+    assert (root / "uploads" / "strategy.pdf").is_file()
 
 @pytest.mark.asyncio
 async def test_campaign_review_and_finalize_flow(tmp_path: Path) -> None:
+    settings = Settings(storage_root=tmp_path)
+    project_id = make_project(settings)
     service = CampaignService(
-        Settings(storage_root=tmp_path),
+        settings,
         parser=FakeCampaignParser(make_campaign_knowledge()),
     )
-    analyzed = await service.analyze(UploadedFile("strategy.pdf", make_pdf_bytes()))
+    analyzed = await service.analyze(
+        project_id, UploadedFile("strategy.pdf", make_pdf_bytes())
+    )
 
     reviewed = service.review(
         analyzed.campaign_id,
@@ -103,6 +118,7 @@ async def test_campaign_review_and_finalize_flow(tmp_path: Path) -> None:
 
     finalized = service.finalize(analyzed.campaign_id)
     assert finalized.status == CampaignStatus.FINALIZED
+    assert finalized.project_id == project_id
     assert finalized.next_route == "/#persona-input"
     assert "## 01. Campaign Overview" in finalized.markdown
     assert "사용자가 수정한 캠페인 개요" in finalized.markdown
@@ -114,11 +130,14 @@ async def test_campaign_service_reuses_analysis_for_identical_pdf(
     tmp_path: Path,
 ) -> None:
     parser = FakeCampaignParser(make_campaign_knowledge())
-    service = CampaignService(Settings(storage_root=tmp_path), parser=parser)
+    settings = Settings(storage_root=tmp_path)
+    project_id = make_project(settings)
+    service = CampaignService(settings, parser=parser)
     pdf_bytes = make_pdf_bytes()
 
-    first = await service.analyze(UploadedFile("strategy.pdf", pdf_bytes))
+    first = await service.analyze(project_id, UploadedFile("strategy.pdf", pdf_bytes))
     second = await service.analyze(
+        project_id,
         UploadedFile("strategy-copy.pdf", pdf_bytes),
         component_files=[UploadedFile("hero.html", b"<section>Hero</section>")],
     )
@@ -132,17 +151,19 @@ async def test_campaign_service_reuses_analysis_for_identical_pdf(
     )
     assert (
         tmp_path
-        / "generated"
-        / "campaigns"
-        / second.campaign_id
+        / "projects"
+        / project_id
+        / "campaign"
         / "component"
         / "01_hero.html"
     ).is_file()
 
 
 def test_campaign_api_accepts_pdf_components_and_assets(tmp_path: Path) -> None:
+    settings = Settings(storage_root=tmp_path)
+    project_id = make_project(settings)
     service = CampaignService(
-        Settings(storage_root=tmp_path),
+        settings,
         parser=FakeCampaignParser(make_campaign_knowledge()),
     )
     app.dependency_overrides[get_campaign_service] = lambda: service
@@ -165,6 +186,7 @@ def test_campaign_api_accepts_pdf_components_and_assets(tmp_path: Path) -> None:
                         ("card.jpg", b"\xff\xd8\xffimage-data", "image/jpeg"),
                     ),
                 ],
+                data={"project_id": project_id},
             )
     finally:
         app.dependency_overrides.clear()
@@ -172,14 +194,17 @@ def test_campaign_api_accepts_pdf_components_and_assets(tmp_path: Path) -> None:
     assert response.status_code == 201
     body = response.json()
     assert body["status"] == "draft"
+    assert body["project_id"] == project_id
     assert body["component_files"] == ["card.html"]
     assert body["asset_files"] == ["card.jpg"]
     assert len(body["data"]) == 8
 
 
 def test_campaign_api_requires_exactly_one_pdf(tmp_path: Path) -> None:
+    settings = Settings(storage_root=tmp_path)
+    project_id = make_project(settings)
     service = CampaignService(
-        Settings(storage_root=tmp_path),
+        settings,
         parser=FakeCampaignParser(make_campaign_knowledge()),
     )
     app.dependency_overrides[get_campaign_service] = lambda: service
@@ -192,6 +217,7 @@ def test_campaign_api_requires_exactly_one_pdf(tmp_path: Path) -> None:
                     ("strategy_file", ("one.pdf", make_pdf_bytes(), "application/pdf")),
                     ("strategy_file", ("two.pdf", make_pdf_bytes(), "application/pdf")),
                 ],
+                data={"project_id": project_id},
             )
     finally:
         app.dependency_overrides.clear()
@@ -202,19 +228,23 @@ def test_campaign_api_requires_exactly_one_pdf(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_campaign_service_rejects_invalid_html_and_image(tmp_path: Path) -> None:
+    settings = Settings(storage_root=tmp_path)
+    project_id = make_project(settings)
     service = CampaignService(
-        Settings(storage_root=tmp_path),
+        settings,
         parser=FakeCampaignParser(make_campaign_knowledge()),
     )
 
     with pytest.raises(ValueError, match="must be HTML"):
         await service.analyze(
+            project_id,
             UploadedFile("strategy.pdf", make_pdf_bytes()),
             component_files=[UploadedFile("component.txt", b"text")],
         )
 
     with pytest.raises(ValueError, match="not a valid image"):
         await service.analyze(
+            project_id,
             UploadedFile("strategy.pdf", make_pdf_bytes()),
             asset_files=[UploadedFile("broken.png", b"not-png")],
         )

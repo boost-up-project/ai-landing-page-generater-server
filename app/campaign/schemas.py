@@ -61,6 +61,7 @@ class CampaignStatus(str, Enum):
 
 
 class CampaignAnalysisResponse(StrictModel):
+    project_id: str
     campaign_id: str
     status: CampaignStatus
     source_file: str
@@ -78,6 +79,7 @@ class CampaignReviewRequest(StrictModel):
 
 
 class CampaignMarkdownResponse(StrictModel):
+    project_id: str
     campaign_id: str
     status: CampaignStatus
     markdown: str
