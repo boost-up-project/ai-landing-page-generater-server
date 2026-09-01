@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pymupdf
@@ -112,8 +113,17 @@ async def test_brand_service_review_and_finalize_flow(tmp_path: Path) -> None:
     assert "[SOURCE_FILE: brand.pdf]" in fake_parser.extracted_text
     assert "[SOURCE_PAGE: 1]" in fake_parser.extracted_text
     assert (
-        tmp_path / "projects" / analyzed.project_id / "brand" / "analyzed.json"
+        tmp_path
+        / "projects"
+        / analyzed.project_id
+        / "brand"
+        / analyzed.brand_id
+        / "analyzed.json"
     ).is_file()
+    project_record = json.loads(
+        (tmp_path / "projects" / analyzed.project_id / "project.json").read_text()
+    )
+    assert project_record["brand"]["current_brand_id"] == analyzed.brand_id
 
     with pytest.raises(BrandStateError):
         service.finalize(analyzed.brand_id)
@@ -191,9 +201,7 @@ def test_local_frontend_origin_is_allowed() -> None:
         )
 
     assert response.status_code == 200
-    assert response.headers["access-control-allow-origin"] == (
-        "http://127.0.0.1:5500"
-    )
+    assert response.headers["access-control-allow-origin"] == ("http://127.0.0.1:5500")
 
 
 @pytest.mark.asyncio
@@ -243,7 +251,14 @@ async def test_brand_service_merges_and_stores_visual_inputs(tmp_path: Path) -> 
     assert "app-icon.jpeg" in visual.icon.content
     assert "brand.ttf" in visual.fonts.content
     assert "#1F4D3A, #D8C3A5" in visual.color.content
-    upload_root = tmp_path / "projects" / analyzed.project_id / "brand" / "uploads"
+    upload_root = (
+        tmp_path
+        / "projects"
+        / analyzed.project_id
+        / "brand"
+        / analyzed.brand_id
+        / "uploads"
+    )
     assert (upload_root / "logo" / "01_wordmark.svg").is_file()
     assert (upload_root / "logo" / "02_wordmark.jpg").is_file()
     assert (upload_root / "icon" / "03_app-icon.png").is_file()

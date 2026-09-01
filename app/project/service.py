@@ -66,6 +66,11 @@ def update_project_stage(
     if next_route:
         record[stage]["next_route"] = next_route
 
-    temporary = record_path.with_suffix(record_path.suffix + ".tmp")
-    temporary.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
-    temporary.replace(record_path)
+    temporary = record_path.with_name(f".{record_path.name}.{uuid4().hex}.tmp")
+    try:
+        temporary.write_text(
+            json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        temporary.replace(record_path)
+    finally:
+        temporary.unlink(missing_ok=True)

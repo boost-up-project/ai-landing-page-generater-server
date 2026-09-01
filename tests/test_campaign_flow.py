@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pymupdf
@@ -91,12 +92,17 @@ async def test_campaign_service_stores_files_and_creates_draft(tmp_path: Path) -
     assert result.reused_from_campaign_id is None
     assert "[SOURCE_FILE: strategy.pdf]" in parser.extracted_text
     assert parser.calls == 1
-    root = tmp_path / "projects" / project_id / "campaign"
+    root = tmp_path / "projects" / project_id / "campaign" / result.campaign_id
     assert (root / "component" / "01_hero.html").read_text() == (
         "<section>Hero</section>"
     )
     assert (root / "assets" / "01_hero.png").is_file()
     assert (root / "uploads" / "strategy.pdf").is_file()
+    project_record = json.loads(
+        (tmp_path / "projects" / project_id / "project.json").read_text()
+    )
+    assert project_record["campaign"]["current_campaign_id"] == result.campaign_id
+
 
 @pytest.mark.asyncio
 async def test_campaign_review_and_finalize_flow(tmp_path: Path) -> None:
@@ -136,6 +142,10 @@ async def test_campaign_service_reuses_analysis_for_identical_pdf(
     pdf_bytes = make_pdf_bytes()
 
     first = await service.analyze(project_id, UploadedFile("strategy.pdf", pdf_bytes))
+    service.review(
+        first.campaign_id,
+        make_campaign_knowledge("사용자가 수정한 캐시 비대상 내용"),
+    )
     second = await service.analyze(
         project_id,
         UploadedFile("strategy-copy.pdf", pdf_bytes),
@@ -146,17 +156,52 @@ async def test_campaign_service_reuses_analysis_for_identical_pdf(
     assert second.campaign_id != first.campaign_id
     assert second.reused_from_campaign_id == first.campaign_id
     assert second.source_checksum == first.source_checksum
+    assert second.data.campaign_overview.content == "캠페인 배경: 신규 서비스 출시"
     assert second.data.campaign_overview.source_references[0].filename == (
         "strategy-copy.pdf"
+    )
+    assert service.get(first.campaign_id).data.campaign_overview.content == (
+        "사용자가 수정한 캐시 비대상 내용"
     )
     assert (
         tmp_path
         / "projects"
         / project_id
         / "campaign"
+        / second.campaign_id
         / "component"
         / "01_hero.html"
     ).is_file()
+    assert (
+        tmp_path
+        / "projects"
+        / project_id
+        / "campaign"
+        / first.campaign_id
+        / "uploads"
+        / "strategy.pdf"
+    ).is_file()
+
+
+@pytest.mark.asyncio
+async def test_campaign_cache_is_scoped_to_project(tmp_path: Path) -> None:
+    parser = FakeCampaignParser(make_campaign_knowledge())
+    settings = Settings(storage_root=tmp_path)
+    first_project_id = make_project(settings)
+    second_project_id = make_project(settings)
+    service = CampaignService(settings, parser=parser)
+    pdf_bytes = make_pdf_bytes()
+
+    first = await service.analyze(
+        first_project_id, UploadedFile("strategy.pdf", pdf_bytes)
+    )
+    second = await service.analyze(
+        second_project_id, UploadedFile("strategy.pdf", pdf_bytes)
+    )
+
+    assert parser.calls == 2
+    assert first.reused_from_campaign_id is None
+    assert second.reused_from_campaign_id is None
 
 
 def test_campaign_api_accepts_pdf_components_and_assets(tmp_path: Path) -> None:
