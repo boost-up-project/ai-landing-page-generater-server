@@ -1,0 +1,336 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from hashlib import sha256
+from pathlib import Path
+from typing import Protocol
+from uuid import UUID, uuid4
+
+from app.brand.ai_parser import AIParserError
+from app.brand.service import _safe_filename, _write_bytes, _write_text
+from app.campaign.ai_parser import GeminiCampaignParser
+from app.campaign.markdown import generate_campaign_markdown
+from app.campaign.schemas import (
+    CampaignAnalysisResponse,
+    CampaignKnowledge,
+    CampaignMarkdownResponse,
+    CampaignStatus,
+)
+from app.common.pdf import ParsedPDF, combine_parsed_pdfs, parse_pdf
+from app.core.config import Settings
+
+
+class CampaignNotFoundError(FileNotFoundError):
+    pass
+
+
+class CampaignStateError(RuntimeError):
+    pass
+
+
+class CampaignParser(Protocol):
+    async def analyze(self, extracted_text: str) -> CampaignKnowledge: ...
+
+
+@dataclass(frozen=True)
+class UploadedFile:
+    filename: str
+    data: bytes
+
+
+class CampaignService:
+    def __init__(
+        self,
+        settings: Settings,
+        parser: CampaignParser | None = None,
+    ) -> None:
+        self._settings = settings
+        self._parser = parser or GeminiCampaignParser(settings)
+
+    async def analyze(
+        self,
+        strategy_file: UploadedFile,
+        *,
+        component_files: list[UploadedFile] | None = None,
+        asset_files: list[UploadedFile] | None = None,
+    ) -> CampaignAnalysisResponse:
+        components = component_files or []
+        assets = asset_files or []
+        _validate_component_files(
+            components,
+            max_files=self._settings.max_campaign_component_files,
+            max_size_bytes=self._settings.max_campaign_component_size_bytes,
+        )
+        _validate_asset_files(
+            assets,
+            max_files=self._settings.max_campaign_asset_files,
+            max_size_bytes=self._settings.max_campaign_asset_size_bytes,
+        )
+
+        parsed = parse_pdf(
+            strategy_file.data,
+            strategy_file.filename,
+            max_size_bytes=self._settings.max_pdf_size_bytes,
+            max_pages=self._settings.max_pdf_pages,
+        )
+        extracted_text = combine_parsed_pdfs(
+            [parsed],
+            max_characters=self._settings.max_extracted_characters,
+        )
+        source_checksum = sha256(strategy_file.data).hexdigest()
+        cached = self._find_cached_analysis(source_checksum)
+        reused_from_campaign_id = cached.campaign_id if cached else None
+        data = (
+            _copy_campaign_data_for_source(cached.data, strategy_file.filename)
+            if cached
+            else await self._parser.analyze(extracted_text)
+        )
+        _validate_source_references(data, parsed)
+
+        campaign_id = str(uuid4())
+        now = datetime.now(timezone.utc)
+        record = CampaignAnalysisResponse(
+            campaign_id=campaign_id,
+            status=CampaignStatus.DRAFT,
+            source_file=strategy_file.filename,
+            source_checksum=source_checksum,
+            reused_from_campaign_id=reused_from_campaign_id,
+            component_files=[item.filename for item in components],
+            asset_files=[item.filename for item in assets],
+            data=data,
+            created_at=now,
+            updated_at=now,
+        )
+
+        upload_dir = self._settings.storage_root / "uploads" / campaign_id
+        _write_bytes(
+            upload_dir / _safe_filename(strategy_file.filename), strategy_file.data
+        )
+        campaign_dir = self._campaign_dir(campaign_id)
+        for index, component in enumerate(components, start=1):
+            _write_bytes(
+                campaign_dir
+                / "component"
+                / f"{index:02d}_{_safe_filename(component.filename)}",
+                component.data,
+            )
+        for index, asset in enumerate(assets, start=1):
+            _write_bytes(
+                campaign_dir
+                / "assets"
+                / f"{index:02d}_{_safe_filename(asset.filename)}",
+                asset.data,
+            )
+        _write_text(campaign_dir / "extracted.txt", extracted_text)
+        _write_text(campaign_dir / "analyzed.json", data.model_dump_json(indent=2))
+        self._save_record(record)
+        return record
+
+    def get(self, campaign_id: str) -> CampaignAnalysisResponse:
+        return self._load_record(campaign_id)
+
+    def review(
+        self, campaign_id: str, data: CampaignKnowledge
+    ) -> CampaignAnalysisResponse:
+        record = self._load_record(campaign_id)
+        if record.status == CampaignStatus.FINALIZED:
+            raise CampaignStateError("Finalized campaign data cannot be reviewed again")
+        parsed = parse_pdf(
+            self._source_path(record).read_bytes(),
+            record.source_file,
+            max_size_bytes=self._settings.max_pdf_size_bytes,
+            max_pages=self._settings.max_pdf_pages,
+        )
+        _validate_source_references(data, parsed)
+        updated = record.model_copy(
+            update={
+                "status": CampaignStatus.REVIEWED,
+                "data": data,
+                "updated_at": datetime.now(timezone.utc),
+            }
+        )
+        _write_text(
+            self._campaign_dir(campaign_id) / "reviewed.json",
+            data.model_dump_json(indent=2),
+        )
+        self._save_record(updated)
+        return updated
+
+    def finalize(self, campaign_id: str) -> CampaignMarkdownResponse:
+        record = self._load_record(campaign_id)
+        if record.status != CampaignStatus.REVIEWED:
+            raise CampaignStateError(
+                "Campaign data must be reviewed before it can be finalized"
+            )
+        markdown = generate_campaign_markdown(record.data)
+        _write_text(self._campaign_dir(campaign_id) / "campaign.md", markdown)
+        finalized = record.model_copy(
+            update={
+                "status": CampaignStatus.FINALIZED,
+                "updated_at": datetime.now(timezone.utc),
+            }
+        )
+        self._save_record(finalized)
+        return CampaignMarkdownResponse(
+            campaign_id=campaign_id,
+            status=CampaignStatus.FINALIZED,
+            markdown=markdown,
+        )
+
+    def get_markdown(self, campaign_id: str) -> CampaignMarkdownResponse:
+        record = self._load_record(campaign_id)
+        markdown_path = self._campaign_dir(campaign_id) / "campaign.md"
+        if record.status != CampaignStatus.FINALIZED or not markdown_path.is_file():
+            raise CampaignStateError("Campaign data has not been finalized")
+        return CampaignMarkdownResponse(
+            campaign_id=campaign_id,
+            status=record.status,
+            markdown=markdown_path.read_text(encoding="utf-8"),
+        )
+
+    def _find_cached_analysis(
+        self, source_checksum: str
+    ) -> CampaignAnalysisResponse | None:
+        root = self._settings.storage_root / "generated" / "campaigns"
+        if not root.is_dir():
+            return None
+
+        for record_path in sorted(
+            root.glob("*/record.json"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        ):
+            try:
+                record = CampaignAnalysisResponse.model_validate_json(
+                    record_path.read_text(encoding="utf-8")
+                )
+            except ValueError:
+                continue
+            if record.source_checksum == source_checksum:
+                return record
+            if record.source_checksum:
+                continue
+            source_path = self._source_path(record)
+            if not source_path.is_file():
+                continue
+            if sha256(source_path.read_bytes()).hexdigest() == source_checksum:
+                return record
+        return None
+
+    def _campaign_dir(self, campaign_id: str) -> Path:
+        try:
+            normalized = str(UUID(campaign_id))
+        except ValueError as exc:
+            raise CampaignNotFoundError("Campaign was not found") from exc
+        return self._settings.storage_root / "generated" / "campaigns" / normalized
+
+    def _source_path(self, record: CampaignAnalysisResponse) -> Path:
+        return (
+            self._settings.storage_root
+            / "uploads"
+            / record.campaign_id
+            / _safe_filename(record.source_file)
+        )
+
+    def _record_path(self, campaign_id: str) -> Path:
+        return self._campaign_dir(campaign_id) / "record.json"
+
+    def _load_record(self, campaign_id: str) -> CampaignAnalysisResponse:
+        path = self._record_path(campaign_id)
+        if not path.is_file():
+            raise CampaignNotFoundError("Campaign was not found")
+        return CampaignAnalysisResponse.model_validate_json(
+            path.read_text(encoding="utf-8")
+        )
+
+    def _save_record(self, record: CampaignAnalysisResponse) -> None:
+        _write_text(
+            self._record_path(record.campaign_id),
+            record.model_dump_json(indent=2),
+        )
+
+
+def _validate_component_files(
+    files: list[UploadedFile], *, max_files: int, max_size_bytes: int
+) -> None:
+    if len(files) > max_files:
+        raise ValueError(f"A maximum of {max_files} HTML components is allowed")
+    for item in files:
+        if not item.data:
+            raise ValueError(f"{item.filename}: empty file")
+        if len(item.data) > max_size_bytes:
+            raise ValueError(
+                f"{item.filename}: file exceeds the {max_size_bytes}-byte limit"
+            )
+        if Path(item.filename).suffix.lower() not in {".html", ".htm"}:
+            raise ValueError(f"{item.filename}: component files must be HTML")
+        try:
+            item.data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"{item.filename}: HTML must be UTF-8 encoded") from exc
+
+
+def _validate_asset_files(
+    files: list[UploadedFile], *, max_files: int, max_size_bytes: int
+) -> None:
+    if len(files) > max_files:
+        raise ValueError(f"A maximum of {max_files} image assets is allowed")
+    validators = {
+        ".png": lambda data: data.startswith(b"\x89PNG\r\n\x1a\n"),
+        ".jpg": lambda data: data.startswith(b"\xff\xd8\xff"),
+        ".jpeg": lambda data: data.startswith(b"\xff\xd8\xff"),
+        ".gif": lambda data: data.startswith((b"GIF87a", b"GIF89a")),
+        ".webp": lambda data: data.startswith(b"RIFF") and data[8:12] == b"WEBP",
+    }
+    for item in files:
+        if not item.data:
+            raise ValueError(f"{item.filename}: empty file")
+        if len(item.data) > max_size_bytes:
+            raise ValueError(
+                f"{item.filename}: file exceeds the {max_size_bytes}-byte limit"
+            )
+        suffix = Path(item.filename).suffix.lower()
+        validator = validators.get(suffix)
+        if validator is None:
+            raise ValueError(
+                f"{item.filename}: image files must be PNG, JPG, JPEG, GIF, or WEBP"
+            )
+        if not validator(item.data):
+            raise ValueError(f"{item.filename}: file is not a valid image")
+
+
+def _copy_campaign_data_for_source(
+    data: CampaignKnowledge, filename: str
+) -> CampaignKnowledge:
+    copied = data.model_copy(deep=True)
+    for field_name in type(copied).model_fields:
+        section = getattr(copied, field_name)
+        section.source_references = [
+            reference.model_copy(update={"filename": filename})
+            for reference in section.source_references
+        ]
+    return copied
+
+
+def _validate_source_references(data: CampaignKnowledge, parsed_pdf: ParsedPDF) -> None:
+    valid_references = {
+        (parsed_pdf.filename, page.page_number) for page in parsed_pdf.pages
+    }
+    for field_name in type(data).model_fields:
+        section = getattr(data, field_name)
+        has_content = bool(section.content.strip())
+        if has_content and not section.source_references:
+            raise AIParserError(
+                f"Campaign content has no source reference: {field_name}"
+            )
+        if not has_content and section.source_references:
+            raise AIParserError(
+                f"Empty campaign content has source references: {field_name}"
+            )
+        for reference in section.source_references:
+            if (reference.filename, reference.page) not in valid_references:
+                raise AIParserError(
+                    "Unknown campaign source reference: "
+                    f"{reference.filename} page {reference.page}"
+                )
