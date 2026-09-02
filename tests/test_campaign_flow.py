@@ -132,6 +132,31 @@ async def test_campaign_review_and_finalize_flow(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_campaign_review_accepts_user_content_without_source(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(storage_root=tmp_path)
+    project_id = make_project(settings)
+    initial = make_campaign_knowledge()
+    initial.objective = CampaignSection(content="", source_references=[])
+    service = CampaignService(settings, parser=FakeCampaignParser(initial))
+    analyzed = await service.analyze(
+        project_id, UploadedFile("strategy.pdf", make_pdf_bytes())
+    )
+
+    edited = analyzed.data.model_copy(deep=True)
+    edited.objective = CampaignSection(
+        content="사용자가 검토 화면에서 추가한 목표",
+        source_references=[],
+    )
+    reviewed = service.review(analyzed.campaign_id, edited)
+
+    assert reviewed.status == CampaignStatus.REVIEWED
+    assert reviewed.data.objective.content == "사용자가 검토 화면에서 추가한 목표"
+    assert reviewed.data.objective.source_references == []
+
+
+@pytest.mark.asyncio
 async def test_campaign_service_reuses_analysis_for_identical_pdf(
     tmp_path: Path,
 ) -> None:

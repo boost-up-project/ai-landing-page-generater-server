@@ -161,7 +161,11 @@ class CampaignService:
             max_size_bytes=self._settings.max_pdf_size_bytes,
             max_pages=self._settings.max_pdf_pages,
         )
-        _validate_source_references(data, parsed)
+        _validate_source_references(
+            data,
+            parsed,
+            allow_unreferenced_content=True,
+        )
         updated = record.model_copy(
             update={
                 "status": CampaignStatus.REVIEWED,
@@ -383,14 +387,23 @@ def _copy_campaign_data_for_source(
     return copied
 
 
-def _validate_source_references(data: CampaignKnowledge, parsed_pdf: ParsedPDF) -> None:
+def _validate_source_references(
+    data: CampaignKnowledge,
+    parsed_pdf: ParsedPDF,
+    *,
+    allow_unreferenced_content: bool = False,
+) -> None:
     valid_references = {
         (parsed_pdf.filename, page.page_number) for page in parsed_pdf.pages
     }
     for field_name in type(data).model_fields:
         section = getattr(data, field_name)
         has_content = bool(section.content.strip())
-        if has_content and not section.source_references:
+        if (
+            has_content
+            and not section.source_references
+            and not allow_unreferenced_content
+        ):
             raise AIParserError(
                 f"Campaign content has no source reference: {field_name}"
             )
