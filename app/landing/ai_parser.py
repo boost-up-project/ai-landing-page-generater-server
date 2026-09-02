@@ -48,6 +48,7 @@ class GeminiLandingParser:
         personas: list[dict[str, Any]],
         components: list[dict[str, Any]],
         asset_filenames: list[str],
+        reference_context: dict[str, Any] | None = None,
     ) -> LandingPlan:
         if not self._settings.gemini_api_key:
             raise AIParserError("GEMINI_API_KEY is not configured")
@@ -57,6 +58,7 @@ class GeminiLandingParser:
             f"[CAMPAIGN_CONTEXT]\n{campaign_context}\n\n"
             f"[PERSONAS]\n{json.dumps(personas, ensure_ascii=False)}\n\n"
             f"[COMPONENTS]\n{json.dumps(components, ensure_ascii=False)}\n\n"
+            f"[REFERENCE_LAYOUT]\n{json.dumps(reference_context or {}, ensure_ascii=False)}\n\n"
             f"[ASSET_FILENAMES]\n{json.dumps(asset_filenames, ensure_ascii=False)}"
         )
         payload = {
@@ -219,7 +221,9 @@ class GeminiLandingParser:
                             base64.b64decode(inline_data["data"], validate=True),
                         )
                     except (ValueError, TypeError) as exc:
-                        raise AIParserError("Gemini returned invalid image data") from exc
+                        raise AIParserError(
+                            "Gemini returned invalid image data"
+                        ) from exc
         raise AIParserError("Gemini response did not contain an image")
 
 

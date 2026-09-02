@@ -12,12 +12,13 @@ class StrictModel(BaseModel):
 
 
 class EditableImage(StrictModel):
-    asset_filename: str
+    asset_filename: str = ""
     alt: str = ""
 
 
 class LandingComponentSelection(StrictModel):
     template_id: str
+    layout_variant: str = "source"
     copy_values: list[str]
     image_values: list[EditableImage]
 
@@ -44,6 +45,7 @@ class ComponentTemplate(StrictModel):
     filename: str
     html: str
     editable_targets: list[EditableTarget]
+    layout_options: list[str] = Field(default_factory=lambda: ["source"])
 
 
 class LandingComponent(StrictModel):
@@ -52,6 +54,8 @@ class LandingComponent(StrictModel):
     name: str
     category: str
     html: str
+    layout_variant: str = "source"
+    layout_options: list[str] = Field(default_factory=lambda: ["source"])
     hidden: bool = False
 
 
@@ -104,6 +108,7 @@ class LandingComponentUpdate(StrictModel):
     instance_id: str
     template_id: str
     html: str
+    layout_variant: str = "source"
     hidden: bool = False
 
 

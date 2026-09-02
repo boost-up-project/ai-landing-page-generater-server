@@ -13,6 +13,8 @@ from app.core.config import Settings
 from app.landing.ai_parser import GeminiLandingParser
 from app.landing.html import (
     apply_editable_values,
+    apply_layout_variant,
+    component_layout_options,
     component_metadata,
     editable_counts,
     editable_image_sources,
@@ -53,6 +55,7 @@ class LandingParser(Protocol):
         personas: list[dict[str, Any]],
         components: list[dict[str, Any]],
         asset_filenames: list[str],
+        reference_context: dict[str, Any] | None = None,
     ) -> LandingPlan: ...
 
     async def generate_copy_candidates(
@@ -117,18 +120,24 @@ class LandingService:
                 "template_id": item.template_id,
                 "name": item.name,
                 "category": item.category,
-                "editable_targets": [target.model_dump() for target in item.editable_targets],
+                "editable_targets": [
+                    target.model_dump() for target in item.editable_targets
+                ],
+                "layout_options": item.layout_options,
             }
             for item in templates
         ]
         plan = await self._parser.compose(
-            brand_context=_stage_markdown(root, project_record, "brand", "current_brand_id", "brand.md"),
+            brand_context=_stage_markdown(
+                root, project_record, "brand", "current_brand_id", "brand.md"
+            ),
             campaign_context=_stage_markdown(
                 root, project_record, "campaign", "current_campaign_id", "campaign.md"
             ),
             personas=personas,
             components=component_manifest,
             asset_filenames=[item.filename for item in assets],
+            reference_context=_reference_layout_context(campaign_dir),
         )
         pages = _build_pages(plan, personas, templates, set(asset_paths))
 
@@ -191,8 +200,15 @@ class LandingService:
                         "Only editable copy and image values may be changed"
                     )
                 for source in editable_image_sources(item.html):
-                    if source.startswith("asset://") and source[8:] not in allowed_assets:
-                        raise LandingStateError("Component references an unknown image asset")
+                    if (
+                        source.startswith("asset://")
+                        and source[8:] not in allowed_assets
+                    ):
+                        raise LandingStateError(
+                            "Component references an unknown image asset"
+                        )
+                if item.layout_variant not in template.layout_options:
+                    raise LandingStateError("Unknown component layout variant")
                 components.append(
                     LandingComponent(
                         instance_id=item.instance_id,
@@ -200,6 +216,8 @@ class LandingService:
                         name=template.name,
                         category=template.category,
                         html=item.html,
+                        layout_variant=item.layout_variant,
+                        layout_options=template.layout_options,
                         hidden=item.hidden,
                     )
                 )
@@ -212,12 +230,16 @@ class LandingService:
                 "updated_at": now,
             }
         )
-        landing_dir = project_dir(self._settings, record.project_id) / "landing" / landing_id
+        landing_dir = (
+            project_dir(self._settings, record.project_id) / "landing" / landing_id
+        )
         for page in saved.pages:
             _write_text(
                 landing_dir / "pages" / page.persona_key / "index.html",
                 "\n".join(
-                    component.html for component in page.components if not component.hidden
+                    component.html
+                    for component in page.components
+                    if not component.hidden
                 ),
             )
         self._save_record(saved)
@@ -344,7 +366,9 @@ class LandingService:
 
     def asset_path(self, landing_id: str, filename: str) -> Path:
         record = self._load_record(landing_id)
-        asset = next((item for item in record.assets if item.filename == filename), None)
+        asset = next(
+            (item for item in record.assets if item.filename == filename), None
+        )
         if asset is None:
             raise LandingNotFoundError("Landing asset was not found")
         root = project_dir(self._settings, record.project_id)
@@ -397,6 +421,7 @@ def _load_templates(component_dir: Path) -> list[ComponentTemplate]:
                 filename=path.name,
                 html=source,
                 editable_targets=inspect_editable_targets(source),
+                layout_options=component_layout_options(source),
             )
         )
     return templates
@@ -429,16 +454,31 @@ def _build_pages(
     persona_map = {item["persona_key"]: item for item in personas}
     pages: list[LandingPage] = []
     for page_plan in plan.pages:
+        selected_ids = [selection.template_id for selection in page_plan.components]
+        expected_ids = [template.template_id for template in templates]
+        if len(selected_ids) != len(expected_ids) or set(selected_ids) != set(
+            expected_ids
+        ):
+            raise AIParserError(
+                "Landing plan must include every component template exactly once"
+            )
         components: list[LandingComponent] = []
         for selection in page_plan.components:
             template = template_map.get(selection.template_id)
             if template is None:
                 raise AIParserError("Landing plan referenced an unknown component")
+            if selection.layout_variant not in template.layout_options:
+                raise AIParserError("Landing plan referenced an unknown layout variant")
             copy_count, image_count = editable_counts(template.html)
-            if len(selection.copy_values) != copy_count or len(selection.image_values) != image_count:
-                raise AIParserError("Landing plan did not replace every editable target")
+            if (
+                len(selection.copy_values) != copy_count
+                or len(selection.image_values) != image_count
+            ):
+                raise AIParserError(
+                    "Landing plan did not replace every editable target"
+                )
             if any(
-                image.asset_filename not in asset_filenames
+                image.asset_filename and image.asset_filename not in asset_filenames
                 for image in selection.image_values
             ):
                 raise AIParserError("Landing plan referenced an unknown image asset")
@@ -449,10 +489,12 @@ def _build_pages(
                     name=template.name,
                     category=template.category,
                     html=apply_editable_values(
-                        template.html,
+                        apply_layout_variant(template.html, selection.layout_variant),
                         selection.copy_values,
                         selection.image_values,
                     ),
+                    layout_variant=selection.layout_variant,
+                    layout_options=template.layout_options,
                 )
             )
         persona = persona_map[page_plan.persona_key]
@@ -472,6 +514,17 @@ def _load_json(path: Path) -> dict[str, Any]:
         return json.loads(path.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError) as exc:
         raise LandingStateError("Project workflow data is incomplete") from exc
+
+
+def _reference_layout_context(campaign_dir: Path) -> dict[str, Any] | None:
+    path = campaign_dir / "reference" / "summary.json"
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def _stage_id(record: dict[str, Any], stage: str, key: str) -> str:

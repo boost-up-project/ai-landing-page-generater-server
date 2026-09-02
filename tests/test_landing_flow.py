@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from app.brand.ai_parser import AIParserError
 from app.core.config import Settings, get_settings
 from app.landing.router import get_landing_service
 from app.landing.schemas import (
@@ -172,7 +173,10 @@ async def test_landing_service_creates_persona_page_without_structure_changes(
         data=b"uploaded-image",
     )
     assert uploaded.source == "landing"
-    assert service.asset_path(result.landing_id, uploaded.filename).read_bytes() == b"uploaded-image"
+    assert (
+        service.asset_path(result.landing_id, uploaded.filename).read_bytes()
+        == b"uploaded-image"
+    )
 
     generated = await service.generate_image_asset(
         result.landing_id,
@@ -185,7 +189,10 @@ async def test_landing_service_creates_persona_page_without_structure_changes(
         ),
     )
     assert generated.source == "landing"
-    assert service.asset_path(result.landing_id, generated.filename).read_bytes() == b"generated-image"
+    assert (
+        service.asset_path(result.landing_id, generated.filename).read_bytes()
+        == b"generated-image"
+    )
 
     component = result.pages[0].components[0]
     saved = service.save(
@@ -240,6 +247,31 @@ async def test_landing_service_creates_persona_page_without_structure_changes(
                 ]
             ),
         )
+
+
+@pytest.mark.asyncio
+async def test_landing_plan_must_include_every_normalized_component(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(storage_root=tmp_path)
+    project_id = make_project(settings)
+    component_dir = (
+        tmp_path
+        / "projects"
+        / project_id
+        / "campaign"
+        / "campaign-record"
+        / "component"
+    )
+    (component_dir / "02_proof.html").write_text(
+        '<section data-component-name="근거" data-component-category="proof" '
+        'data-layout-options="source cards"><p data-editable="copy">기존 근거</p></section>',
+        encoding="utf-8",
+    )
+    service = LandingService(settings, parser=FakeLandingParser())
+
+    with pytest.raises(AIParserError, match="include every component template"):
+        await service.create(project_id)
 
 
 def test_landing_api_creates_page_and_serves_campaign_asset(tmp_path: Path) -> None:
