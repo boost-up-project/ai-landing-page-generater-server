@@ -79,6 +79,23 @@ def editable_counts(source: str) -> tuple[int, int]:
     return len(COPY_PATTERN.findall(source)), len(IMAGE_PATTERN.findall(source))
 
 
+def editable_structure(source: str) -> str:
+    def normalize_copy(match: re.Match[str]) -> str:
+        return f"{match.group(1)}__EDITABLE_COPY__{match.group(4)}"
+
+    normalized = COPY_PATTERN.sub(normalize_copy, source)
+
+    def normalize_image(match: re.Match[str]) -> str:
+        tag = _set_attribute(match.group(0), "src", "__EDITABLE_IMAGE__")
+        return _set_attribute(tag, "alt", "__EDITABLE_ALT__")
+
+    return IMAGE_PATTERN.sub(normalize_image, normalized)
+
+
+def editable_image_sources(source: str) -> list[str]:
+    return [_attribute(match.group(0), "src") for match in IMAGE_PATTERN.finditer(source)]
+
+
 def _set_attribute(tag: str, name: str, value: str) -> str:
     escaped = html_module.escape(value, quote=True)
     pattern = re.compile(

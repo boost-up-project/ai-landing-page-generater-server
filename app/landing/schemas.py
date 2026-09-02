@@ -100,6 +100,22 @@ class ImageGenerateRequest(StrictModel):
     ] = "16:9"
 
 
+class LandingComponentUpdate(StrictModel):
+    instance_id: str
+    template_id: str
+    html: str
+    hidden: bool = False
+
+
+class LandingPageUpdate(StrictModel):
+    persona_key: str
+    components: list[LandingComponentUpdate]
+
+
+class LandingSaveRequest(StrictModel):
+    pages: list[LandingPageUpdate] = Field(min_length=1, max_length=5)
+
+
 class LandingResponse(StrictModel):
     project_id: str
     landing_id: str

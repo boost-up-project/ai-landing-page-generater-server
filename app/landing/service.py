@@ -15,6 +15,8 @@ from app.landing.html import (
     apply_editable_values,
     component_metadata,
     editable_counts,
+    editable_image_sources,
+    editable_structure,
     inspect_editable_targets,
 )
 from app.landing.schemas import (
@@ -27,6 +29,7 @@ from app.landing.schemas import (
     LandingPage,
     LandingPlan,
     LandingResponse,
+    LandingSaveRequest,
     LandingStatus,
 )
 from app.persona.schemas import PersonaAnalysisResponse, PersonaStatus
@@ -163,6 +166,71 @@ class LandingService:
 
     def get(self, landing_id: str) -> LandingResponse:
         return self._load_record(landing_id)
+
+    def save(self, landing_id: str, request: LandingSaveRequest) -> LandingResponse:
+        record = self._load_record(landing_id)
+        if [item.persona_key for item in request.pages] != [
+            item.persona_key for item in record.pages
+        ]:
+            raise LandingStateError("Every persona page must be saved in order")
+        template_map = {item.template_id: item for item in record.component_library}
+        allowed_assets = {item.filename for item in record.assets}
+        saved_pages: list[LandingPage] = []
+        seen_instance_ids: set[str] = set()
+        for page, update in zip(record.pages, request.pages, strict=True):
+            components: list[LandingComponent] = []
+            for item in update.components:
+                if item.instance_id in seen_instance_ids:
+                    raise LandingStateError("Component instance IDs must be unique")
+                seen_instance_ids.add(item.instance_id)
+                template = template_map.get(item.template_id)
+                if template is None:
+                    raise LandingStateError("Unknown component template")
+                if editable_structure(item.html) != editable_structure(template.html):
+                    raise LandingStateError(
+                        "Only editable copy and image values may be changed"
+                    )
+                for source in editable_image_sources(item.html):
+                    if source.startswith("asset://") and source[8:] not in allowed_assets:
+                        raise LandingStateError("Component references an unknown image asset")
+                components.append(
+                    LandingComponent(
+                        instance_id=item.instance_id,
+                        template_id=template.template_id,
+                        name=template.name,
+                        category=template.category,
+                        html=item.html,
+                        hidden=item.hidden,
+                    )
+                )
+            saved_pages.append(page.model_copy(update={"components": components}))
+        now = datetime.now(timezone.utc)
+        saved = record.model_copy(
+            update={
+                "status": LandingStatus.SAVED,
+                "pages": saved_pages,
+                "updated_at": now,
+            }
+        )
+        landing_dir = project_dir(self._settings, record.project_id) / "landing" / landing_id
+        for page in saved.pages:
+            _write_text(
+                landing_dir / "pages" / page.persona_key / "index.html",
+                "\n".join(
+                    component.html for component in page.components if not component.hidden
+                ),
+            )
+        self._save_record(saved)
+        update_project_stage(
+            self._settings,
+            record.project_id,
+            "landing",
+            status=saved.status.value,
+            item_id_name="current_landing_id",
+            item_id=landing_id,
+            next_route="/#landing-editor",
+        )
+        return saved
 
     async def copy_candidates(
         self,

@@ -16,7 +16,9 @@ from app.landing.schemas import (
     ImageGenerateRequest,
     LandingComponentSelection,
     LandingPagePlan,
+    LandingPageUpdate,
     LandingPlan,
+    LandingSaveRequest,
 )
 from app.landing.service import LandingService
 from app.main import app
@@ -184,6 +186,60 @@ async def test_landing_service_creates_persona_page_without_structure_changes(
     )
     assert generated.source == "landing"
     assert service.asset_path(result.landing_id, generated.filename).read_bytes() == b"generated-image"
+
+    component = result.pages[0].components[0]
+    saved = service.save(
+        result.landing_id,
+        LandingSaveRequest(
+            pages=[
+                LandingPageUpdate(
+                    persona_key="persona-a",
+                    components=[
+                        {
+                            "instance_id": component.instance_id,
+                            "template_id": component.template_id,
+                            "html": component.html.replace(
+                                "작은 변화로 시작하는 새로운 공간",
+                                "내 예산에 맞춘 첫 번째 공간",
+                            ),
+                            "hidden": False,
+                        }
+                    ],
+                )
+            ]
+        ),
+    )
+    assert saved.status.value == "saved"
+    assert "내 예산에 맞춘 첫 번째 공간" in (
+        tmp_path
+        / "projects"
+        / project_id
+        / "landing"
+        / result.landing_id
+        / "pages"
+        / "persona-a"
+        / "index.html"
+    ).read_text(encoding="utf-8")
+
+    invalid_html = component.html.replace("<h1", "<h2").replace("</h1>", "</h2>")
+    with pytest.raises(RuntimeError, match="Only editable copy"):
+        service.save(
+            result.landing_id,
+            LandingSaveRequest(
+                pages=[
+                    LandingPageUpdate(
+                        persona_key="persona-a",
+                        components=[
+                            {
+                                "instance_id": component.instance_id,
+                                "template_id": component.template_id,
+                                "html": invalid_html,
+                            }
+                        ],
+                    )
+                ]
+            ),
+        )
 
 
 def test_landing_api_creates_page_and_serves_campaign_asset(tmp_path: Path) -> None:

@@ -12,6 +12,7 @@ from app.landing.schemas import (
     LandingAsset,
     LandingCreateRequest,
     LandingResponse,
+    LandingSaveRequest,
 )
 from app.landing.service import (
     LandingNotFoundError,
@@ -53,6 +54,20 @@ async def get_landing(
         return service.get(landing_id)
     except LandingNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.put("/{landing_id}", response_model=LandingResponse)
+async def save_landing(
+    landing_id: str,
+    request: LandingSaveRequest,
+    service: Annotated[LandingService, Depends(get_landing_service)],
+) -> LandingResponse:
+    try:
+        return service.save(landing_id, request)
+    except LandingNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except LandingStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/{landing_id}/copy-candidates", response_model=CopyCandidateResponse)
