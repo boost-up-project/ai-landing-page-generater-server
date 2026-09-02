@@ -198,6 +198,11 @@ class GeminiLandingParser:
                 )
         except httpx.HTTPError as exc:
             raise AIParserError("Could not reach the Gemini image API") from exc
+        if response.status_code == 429:
+            raise AIParserError(
+                "Gemini image generation quota is exhausted. "
+                "Please try again later or configure an image-enabled API plan."
+            )
         if response.is_error:
             raise AIParserError(
                 f"Gemini image API returned {response.status_code}: {response.text}"
