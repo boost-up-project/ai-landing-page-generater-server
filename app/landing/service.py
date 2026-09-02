@@ -19,6 +19,8 @@ from app.landing.html import (
 )
 from app.landing.schemas import (
     ComponentTemplate,
+    CopyCandidateRequest,
+    CopyCandidateResponse,
     LandingAsset,
     LandingComponent,
     LandingPage,
@@ -48,6 +50,17 @@ class LandingParser(Protocol):
         components: list[dict[str, Any]],
         asset_filenames: list[str],
     ) -> LandingPlan: ...
+
+    async def generate_copy_candidates(
+        self,
+        *,
+        current_value: str,
+        user_prompt: str,
+        persona_name: str,
+        page_intent: str,
+        brand_context: str,
+        campaign_context: str,
+    ) -> CopyCandidateResponse: ...
 
 
 class LandingService:
@@ -138,6 +151,33 @@ class LandingService:
 
     def get(self, landing_id: str) -> LandingResponse:
         return self._load_record(landing_id)
+
+    async def copy_candidates(
+        self,
+        landing_id: str,
+        request: CopyCandidateRequest,
+    ) -> CopyCandidateResponse:
+        record = self._load_record(landing_id)
+        page = next(
+            (item for item in record.pages if item.persona_key == request.persona_key),
+            None,
+        )
+        if page is None:
+            raise LandingStateError("Landing persona page was not found")
+        root = project_dir(self._settings, record.project_id)
+        project_record = _load_json(root / "project.json")
+        return await self._parser.generate_copy_candidates(
+            current_value=request.current_value,
+            user_prompt=request.prompt,
+            persona_name=page.persona_name,
+            page_intent=page.ai_intent,
+            brand_context=_stage_markdown(
+                root, project_record, "brand", "current_brand_id", "brand.md"
+            ),
+            campaign_context=_stage_markdown(
+                root, project_record, "campaign", "current_campaign_id", "campaign.md"
+            ),
+        )
 
     def asset_path(self, landing_id: str, filename: str) -> Path:
         record = self._load_record(landing_id)
@@ -287,4 +327,3 @@ def _stage_markdown(
     if not path.is_file():
         raise LandingStateError(f"Finalized {stage} markdown is required")
     return path.read_text(encoding="utf-8")
-

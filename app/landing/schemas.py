@@ -75,6 +75,18 @@ class LandingCreateRequest(StrictModel):
     project_id: str
 
 
+class CopyCandidateRequest(StrictModel):
+    persona_key: str
+    instance_id: str
+    editable_index: int = Field(ge=0)
+    current_value: str = Field(max_length=2000)
+    prompt: str = Field(default="", max_length=1000)
+
+
+class CopyCandidateResponse(StrictModel):
+    candidates: list[str] = Field(min_length=3, max_length=3)
+
+
 class LandingResponse(StrictModel):
     project_id: str
     landing_id: str
@@ -86,4 +98,3 @@ class LandingResponse(StrictModel):
     pages: list[LandingPage]
     created_at: datetime
     updated_at: datetime
-

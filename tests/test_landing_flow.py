@@ -10,6 +10,8 @@ from fastapi.testclient import TestClient
 from app.core.config import Settings, get_settings
 from app.landing.router import get_landing_service
 from app.landing.schemas import (
+    CopyCandidateRequest,
+    CopyCandidateResponse,
     EditableImage,
     LandingComponentSelection,
     LandingPagePlan,
@@ -47,6 +49,15 @@ class FakeLandingParser:
                         )
                     ],
                 )
+            ]
+        )
+
+    async def generate_copy_candidates(self, **_: object) -> CopyCandidateResponse:
+        return CopyCandidateResponse(
+            candidates=[
+                "작은 변화로 완성하는 나만의 공간",
+                "오늘 시작하는 가벼운 공간 변화",
+                "내 예산에 맞춘 첫 번째 공간",
             ]
         )
 
@@ -135,6 +146,18 @@ async def test_landing_service_creates_persona_page_without_structure_changes(
     assert 'src="asset://01_room.png"' in html
     assert 'alt="밝고 정돈된 거실"' in html
     assert service.get(result.landing_id) == result
+
+    candidates = await service.copy_candidates(
+        result.landing_id,
+        CopyCandidateRequest(
+            persona_key="persona-a",
+            instance_id=result.pages[0].components[0].instance_id,
+            editable_index=0,
+            current_value="작은 변화로 시작하는 새로운 공간",
+            prompt="조금 더 가볍게",
+        ),
+    )
+    assert len(candidates.candidates) == 3
 
 
 def test_landing_api_creates_page_and_serves_campaign_asset(tmp_path: Path) -> None:
