@@ -18,6 +18,7 @@ from app.landing.html import (
     component_layout_options,
     component_metadata,
     editable_counts,
+    editable_image_defaults,
     editable_image_sources,
     editable_structure,
     inspect_editable_targets,
@@ -514,16 +515,24 @@ def _build_pages(
             if selection.layout_variant not in template.layout_options:
                 raise AIParserError("Landing plan referenced an unknown layout variant")
             copy_count, image_count = editable_counts(template.html)
-            if (
-                len(selection.copy_values) != copy_count
-                or len(selection.image_values) != image_count
-            ):
-                raise AIParserError(
-                    "Landing plan did not replace every editable target"
-                )
+            default_targets = inspect_editable_targets(template.html)
+            default_copy_values = [
+                target.current_value
+                for target in default_targets
+                if target.kind == "copy"
+            ]
+            copy_values = [
+                *selection.copy_values[:copy_count],
+                *default_copy_values[len(selection.copy_values) :],
+            ][:copy_count]
+            default_image_values = editable_image_defaults(template.html)
+            image_values = [
+                *selection.image_values[:image_count],
+                *default_image_values[len(selection.image_values) :],
+            ][:image_count]
             if any(
                 image.asset_filename and image.asset_filename not in asset_filenames
-                for image in selection.image_values
+                for image in image_values
             ):
                 raise AIParserError("Landing plan referenced an unknown image asset")
             components.append(
@@ -534,8 +543,8 @@ def _build_pages(
                     category=template.category,
                     html=apply_editable_values(
                         apply_layout_variant(template.html, selection.layout_variant),
-                        selection.copy_values,
-                        selection.image_values,
+                        copy_values,
+                        image_values,
                     ),
                     layout_variant=selection.layout_variant,
                     layout_options=template.layout_options,

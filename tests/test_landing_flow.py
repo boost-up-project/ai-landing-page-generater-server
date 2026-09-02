@@ -96,6 +96,25 @@ class HeaderAwareLandingParser(FakeLandingParser):
         )
 
 
+class PartialLandingParser(FakeLandingParser):
+    async def compose(self, **_: object) -> LandingPlan:
+        return LandingPlan(
+            pages=[
+                LandingPagePlan(
+                    persona_key="persona-a",
+                    ai_intent="AI가 일부 편집값만 반환했습니다.",
+                    components=[
+                        LandingComponentSelection(
+                            template_id="component-1",
+                            copy_values=[],
+                            image_values=[],
+                        )
+                    ],
+                )
+            ]
+        )
+
+
 def make_project(settings: Settings) -> str:
     project_id = create_project_id()
     root = project_dir(settings, project_id)
@@ -299,6 +318,22 @@ async def test_landing_plan_must_include_every_normalized_component(
 
     with pytest.raises(AIParserError, match="include every component template"):
         await service.create(project_id)
+
+
+@pytest.mark.asyncio
+async def test_landing_keeps_source_values_when_ai_omits_editable_targets(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(storage_root=tmp_path)
+    project_id = make_project(settings)
+    service = LandingService(settings, parser=PartialLandingParser())
+
+    result = await service.create(project_id)
+
+    html = result.pages[0].components[0].html
+    assert "기존 제목" in html
+    assert 'src="old.png"' in html
+    assert 'alt="기존 이미지"' in html
 
 
 @pytest.mark.asyncio

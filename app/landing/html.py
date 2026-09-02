@@ -108,6 +108,25 @@ def editable_counts(source: str) -> tuple[int, int]:
     return len(COPY_PATTERN.findall(source)), len(IMAGE_PATTERN.findall(source))
 
 
+def editable_image_defaults(source: str) -> list[EditableImage]:
+    """Return image values that keep each original source and alternative text."""
+    defaults: list[EditableImage] = []
+    for match in IMAGE_PATTERN.finditer(source):
+        tag = match.group(0)
+        source_value = _attribute(tag, "src")
+        defaults.append(
+            EditableImage(
+                asset_filename=(
+                    source_value.removeprefix("asset://")
+                    if source_value.startswith("asset://")
+                    else ""
+                ),
+                alt=_attribute(tag, "alt"),
+            )
+        )
+    return defaults
+
+
 def editable_structure(source: str) -> str:
     def normalize_copy(match: re.Match[str]) -> str:
         return f"{match.group(1)}__EDITABLE_COPY__{match.group(4)}"
