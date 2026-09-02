@@ -22,6 +22,18 @@ COPY_PROMPT = (
     .read_text(encoding="utf-8")
     .strip()
 )
+IMAGE_ASPECT_RATIOS = {
+    "1:1": "ASPECT_RATIO_ONE_BY_ONE",
+    "2:3": "ASPECT_RATIO_TWO_BY_THREE",
+    "3:2": "ASPECT_RATIO_THREE_BY_TWO",
+    "3:4": "ASPECT_RATIO_THREE_BY_FOUR",
+    "4:3": "ASPECT_RATIO_FOUR_BY_THREE",
+    "4:5": "ASPECT_RATIO_FOUR_BY_FIVE",
+    "5:4": "ASPECT_RATIO_FIVE_BY_FOUR",
+    "9:16": "ASPECT_RATIO_NINE_BY_SIXTEEN",
+    "16:9": "ASPECT_RATIO_SIXTEEN_BY_NINE",
+    "21:9": "ASPECT_RATIO_TWENTY_ONE_BY_NINE",
+}
 
 
 class GeminiLandingParser:
@@ -164,7 +176,10 @@ class GeminiLandingParser:
             "generationConfig": {
                 "responseModalities": ["IMAGE"],
                 "responseFormat": {
-                    "image": {"aspectRatio": aspect_ratio, "imageSize": "1K"}
+                    "image": {
+                        "aspectRatio": IMAGE_ASPECT_RATIOS[aspect_ratio],
+                        "imageSize": "IMAGE_SIZE_ONE_K",
+                    }
                 },
             },
         }
