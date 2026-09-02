@@ -189,10 +189,28 @@ class LandingService:
         return response
 
     def get(self, landing_id: str) -> LandingResponse:
-        return self._load_record(landing_id)
+        record = self._load_record(landing_id)
+        upgraded = _upgrade_legacy_header(record)
+        if upgraded == record:
+            return record
+        upgraded = upgraded.model_copy(
+            update={"updated_at": datetime.now(timezone.utc)}
+        )
+        self._save_record(upgraded)
+        landing_dir = (
+            project_dir(self._settings, upgraded.project_id)
+            / "landing"
+            / upgraded.landing_id
+        )
+        for page in upgraded.pages:
+            _write_text(
+                landing_dir / "pages" / page.persona_key / "index.html",
+                _page_html(page),
+            )
+        return upgraded
 
     def save(self, landing_id: str, request: LandingSaveRequest) -> LandingResponse:
-        record = self._load_record(landing_id)
+        record = self.get(landing_id)
         if [item.persona_key for item in request.pages] != [
             item.persona_key for item in record.pages
         ]:
@@ -554,6 +572,54 @@ def _page_html(page: LandingPage) -> str:
         component.html
         for component in [*page.header_components, *page.components]
         if not component.hidden
+    )
+
+
+def _upgrade_legacy_header(record: LandingResponse) -> LandingResponse:
+    """Move navigation templates from pre-header records into immutable page headers."""
+    header_templates = [
+        template
+        for template in record.component_library
+        if template.category == "navigation"
+    ]
+    if not header_templates:
+        return record
+    header_template_ids = {template.template_id for template in header_templates}
+    body_library = [
+        template
+        for template in record.component_library
+        if template.template_id not in header_template_ids
+    ]
+    pages: list[LandingPage] = []
+    for page in record.pages:
+        body_components = [
+            component
+            for component in page.components
+            if component.template_id not in header_template_ids
+            and component.category != "navigation"
+        ]
+        header_components = page.header_components or [
+            LandingComponent(
+                instance_id=str(uuid4()),
+                template_id=template.template_id,
+                name=template.name,
+                category=template.category,
+                html=template.html,
+                layout_variant="source",
+                layout_options=["source"],
+            )
+            for template in header_templates
+        ]
+        pages.append(
+            page.model_copy(
+                update={
+                    "header_components": header_components,
+                    "components": body_components,
+                }
+            )
+        )
+    return record.model_copy(
+        update={"component_library": body_library, "pages": pages}
     )
 
 

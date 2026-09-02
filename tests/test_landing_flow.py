@@ -341,6 +341,38 @@ async def test_navigation_is_fixed_header_and_excluded_from_body_library(
     ).read_text(encoding="utf-8")
     assert exported.index("공통 메뉴") < exported.index("캠페인에 맞춘 본문 제목")
 
+    legacy = result.model_copy(
+        update={
+            "component_library": [
+                result.pages[0].header_components[0].model_copy(
+                    update={
+                        "filename": "00_header.html",
+                        "editable_targets": [],
+                    }
+                ),
+                *result.component_library,
+            ],
+            "pages": [
+                result.pages[0].model_copy(
+                    update={
+                        "header_components": [],
+                        "components": [
+                            *result.pages[0].header_components,
+                            *result.pages[0].components,
+                        ],
+                    }
+                )
+            ],
+        }
+    )
+    service._save_record(legacy)
+
+    upgraded = service.get(result.landing_id)
+
+    assert [item.name for item in upgraded.component_library] == ["히어로"]
+    assert [item.name for item in upgraded.pages[0].header_components] == ["공통 헤더"]
+    assert [item.name for item in upgraded.pages[0].components] == ["히어로"]
+
 
 def test_landing_api_creates_page_and_serves_campaign_asset(tmp_path: Path) -> None:
     settings = Settings(storage_root=tmp_path)
