@@ -1,0 +1,290 @@
+from __future__ import annotations
+
+import json
+import mimetypes
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Protocol
+from uuid import UUID, uuid4
+
+from app.brand.ai_parser import AIParserError
+from app.brand.service import _write_text
+from app.core.config import Settings
+from app.landing.ai_parser import GeminiLandingParser
+from app.landing.html import (
+    apply_editable_values,
+    component_metadata,
+    editable_counts,
+    inspect_editable_targets,
+)
+from app.landing.schemas import (
+    ComponentTemplate,
+    LandingAsset,
+    LandingComponent,
+    LandingPage,
+    LandingPlan,
+    LandingResponse,
+    LandingStatus,
+)
+from app.persona.schemas import PersonaAnalysisResponse, PersonaStatus
+from app.project.service import ensure_project, project_dir, update_project_stage
+
+
+class LandingNotFoundError(FileNotFoundError):
+    pass
+
+
+class LandingStateError(RuntimeError):
+    pass
+
+
+class LandingParser(Protocol):
+    async def compose(
+        self,
+        *,
+        brand_context: str,
+        campaign_context: str,
+        personas: list[dict[str, Any]],
+        components: list[dict[str, Any]],
+        asset_filenames: list[str],
+    ) -> LandingPlan: ...
+
+
+class LandingService:
+    def __init__(
+        self,
+        settings: Settings,
+        parser: LandingParser | None = None,
+    ) -> None:
+        self._settings = settings
+        self._parser = parser or GeminiLandingParser(settings)
+
+    async def create(self, project_id: str) -> LandingResponse:
+        root = ensure_project(self._settings, project_id)
+        project_record = _load_json(root / "project.json")
+        campaign_id = _stage_id(project_record, "campaign", "current_campaign_id")
+        persona_id = _stage_id(project_record, "persona", "current_persona_id")
+        campaign_dir = root / "campaign" / campaign_id
+        persona_dir = root / "persona" / persona_id
+        persona_record = PersonaAnalysisResponse.model_validate_json(
+            (persona_dir / "record.json").read_text(encoding="utf-8")
+        )
+        if persona_record.status != PersonaStatus.FINALIZED:
+            raise LandingStateError("Persona data must be finalized first")
+
+        templates = _load_templates(campaign_dir / "component")
+        if not templates:
+            raise LandingStateError("At least one campaign HTML component is required")
+        assets, asset_paths = _load_assets(campaign_dir / "assets")
+        personas = [
+            {
+                "persona_key": f"persona-{chr(97 + index)}",
+                "name": persona.name,
+                "data": persona.model_dump(),
+            }
+            for index, persona in enumerate(persona_record.data.personas)
+        ]
+        component_manifest = [
+            {
+                "template_id": item.template_id,
+                "name": item.name,
+                "category": item.category,
+                "editable_targets": [target.model_dump() for target in item.editable_targets],
+            }
+            for item in templates
+        ]
+        plan = await self._parser.compose(
+            brand_context=_stage_markdown(root, project_record, "brand", "current_brand_id", "brand.md"),
+            campaign_context=_stage_markdown(
+                root, project_record, "campaign", "current_campaign_id", "campaign.md"
+            ),
+            personas=personas,
+            components=component_manifest,
+            asset_filenames=[item.filename for item in assets],
+        )
+        pages = _build_pages(plan, personas, templates, set(asset_paths))
+
+        landing_id = str(uuid4())
+        now = datetime.now(timezone.utc)
+        response = LandingResponse(
+            project_id=project_id,
+            landing_id=landing_id,
+            source_campaign_id=campaign_id,
+            source_persona_id=persona_id,
+            status=LandingStatus.DRAFT,
+            component_library=templates,
+            assets=assets,
+            pages=pages,
+            created_at=now,
+            updated_at=now,
+        )
+        landing_dir = root / "landing" / landing_id
+        self._save_record(response)
+        for page in pages:
+            _write_text(
+                landing_dir / "pages" / page.persona_key / "index.html",
+                "\n".join(component.html for component in page.components),
+            )
+        update_project_stage(
+            self._settings,
+            project_id,
+            "landing",
+            status=response.status.value,
+            item_id_name="current_landing_id",
+            item_id=landing_id,
+            next_route="/#landing-editor",
+        )
+        return response
+
+    def get(self, landing_id: str) -> LandingResponse:
+        return self._load_record(landing_id)
+
+    def asset_path(self, landing_id: str, filename: str) -> Path:
+        record = self._load_record(landing_id)
+        allowed = {asset.filename for asset in record.assets}
+        if filename not in allowed:
+            raise LandingNotFoundError("Landing asset was not found")
+        root = project_dir(self._settings, record.project_id)
+        path = root / "campaign" / record.source_campaign_id / "assets" / filename
+        if not path.is_file():
+            raise LandingNotFoundError("Landing asset was not found")
+        return path
+
+    def _record_path(self, landing_id: str) -> Path:
+        try:
+            normalized = str(UUID(landing_id))
+        except ValueError as exc:
+            raise LandingNotFoundError("Landing was not found") from exc
+        projects_root = self._settings.storage_root / "projects"
+        for path in projects_root.glob(f"*/landing/{normalized}/record.json"):
+            return path
+        raise LandingNotFoundError("Landing was not found")
+
+    def _load_record(self, landing_id: str) -> LandingResponse:
+        return LandingResponse.model_validate_json(
+            self._record_path(landing_id).read_text(encoding="utf-8")
+        )
+
+    def _save_record(self, record: LandingResponse) -> None:
+        _write_text(
+            project_dir(self._settings, record.project_id)
+            / "landing"
+            / record.landing_id
+            / "record.json",
+            record.model_dump_json(indent=2),
+        )
+
+
+def _load_templates(component_dir: Path) -> list[ComponentTemplate]:
+    templates: list[ComponentTemplate] = []
+    if not component_dir.is_dir():
+        return templates
+    for index, path in enumerate(sorted(component_dir.glob("*.htm*")), start=1):
+        source = path.read_text(encoding="utf-8")
+        name, category = component_metadata(source, path.name)
+        templates.append(
+            ComponentTemplate(
+                template_id=f"component-{index}",
+                name=name,
+                category=category,
+                filename=path.name,
+                html=source,
+                editable_targets=inspect_editable_targets(source),
+            )
+        )
+    return templates
+
+
+def _load_assets(asset_dir: Path) -> tuple[list[LandingAsset], dict[str, Path]]:
+    if not asset_dir.is_dir():
+        return [], {}
+    paths = {path.name: path for path in sorted(asset_dir.iterdir()) if path.is_file()}
+    assets = [
+        LandingAsset(
+            filename=name,
+            content_type=mimetypes.guess_type(name)[0] or "application/octet-stream",
+        )
+        for name in paths
+    ]
+    return assets, paths
+
+
+def _build_pages(
+    plan: LandingPlan,
+    personas: list[dict[str, Any]],
+    templates: list[ComponentTemplate],
+    asset_filenames: set[str],
+) -> list[LandingPage]:
+    expected_keys = [item["persona_key"] for item in personas]
+    if [page.persona_key for page in plan.pages] != expected_keys:
+        raise AIParserError("Landing plan must contain every persona in order")
+    template_map = {item.template_id: item for item in templates}
+    persona_map = {item["persona_key"]: item for item in personas}
+    pages: list[LandingPage] = []
+    for page_plan in plan.pages:
+        components: list[LandingComponent] = []
+        for selection in page_plan.components:
+            template = template_map.get(selection.template_id)
+            if template is None:
+                raise AIParserError("Landing plan referenced an unknown component")
+            copy_count, image_count = editable_counts(template.html)
+            if len(selection.copy_values) != copy_count or len(selection.image_values) != image_count:
+                raise AIParserError("Landing plan did not replace every editable target")
+            if any(
+                image.asset_filename not in asset_filenames
+                for image in selection.image_values
+            ):
+                raise AIParserError("Landing plan referenced an unknown image asset")
+            components.append(
+                LandingComponent(
+                    instance_id=str(uuid4()),
+                    template_id=template.template_id,
+                    name=template.name,
+                    category=template.category,
+                    html=apply_editable_values(
+                        template.html,
+                        selection.copy_values,
+                        selection.image_values,
+                    ),
+                )
+            )
+        persona = persona_map[page_plan.persona_key]
+        pages.append(
+            LandingPage(
+                persona_key=page_plan.persona_key,
+                persona_name=str(persona["name"]),
+                ai_intent=page_plan.ai_intent,
+                components=components,
+            )
+        )
+    return pages
+
+
+def _load_json(path: Path) -> dict[str, Any]:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        raise LandingStateError("Project workflow data is incomplete") from exc
+
+
+def _stage_id(record: dict[str, Any], stage: str, key: str) -> str:
+    value = record.get(stage, {})
+    item_id = value.get(key) if isinstance(value, dict) else None
+    if not isinstance(item_id, str):
+        raise LandingStateError(f"{stage.title()} data is required")
+    return item_id
+
+
+def _stage_markdown(
+    root: Path,
+    record: dict[str, Any],
+    stage: str,
+    key: str,
+    filename: str,
+) -> str:
+    item_id = _stage_id(record, stage, key)
+    path = root / stage / item_id / filename
+    if not path.is_file():
+        raise LandingStateError(f"Finalized {stage} markdown is required")
+    return path.read_text(encoding="utf-8")
+
