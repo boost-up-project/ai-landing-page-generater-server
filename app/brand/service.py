@@ -16,6 +16,7 @@ from app.brand.schemas import (
 )
 from app.common.pdf import ParsedPDF, combine_parsed_pdfs, parse_pdf
 from app.core.config import Settings
+from app.project.service import create_project_id, project_dir, update_project_stage
 
 
 class BrandNotFoundError(FileNotFoundError):
@@ -98,20 +99,22 @@ class BrandService:
         _validate_source_references(data, parsed)
         data = _merge_visual_inputs(data, visual_assets, normalized_colors)
 
+        project_id = create_project_id()
         brand_id = str(uuid4())
         now = datetime.now(timezone.utc)
         record = BrandAnalysisResponse(
+            project_id=project_id,
             brand_id=brand_id,
             status=BrandStatus.DRAFT,
-            source_files=[
-                document.filename for document in uploaded_documents
-            ] + [asset.filename for asset in visual_assets],
+            source_files=[document.filename for document in uploaded_documents]
+            + [asset.filename for asset in visual_assets],
             data=data,
             created_at=now,
             updated_at=now,
         )
 
-        upload_dir = self._settings.storage_root / "uploads" / brand_id
+        brand_dir = self._brand_dir(project_id, brand_id)
+        upload_dir = brand_dir / "uploads"
         for index, document in enumerate(uploaded_documents, start=1):
             safe_name = _safe_filename(document.filename)
             _write_bytes(upload_dir / f"{index:02d}_{safe_name}", document.data)
@@ -122,10 +125,18 @@ class BrandService:
                 asset.data,
             )
 
-        brand_dir = self._brand_dir(brand_id)
         _write_text(brand_dir / "extracted.txt", extracted_text)
         _write_text(brand_dir / "analyzed.json", data.model_dump_json(indent=2))
         self._save_record(record)
+        update_project_stage(
+            self._settings,
+            project_id,
+            "brand",
+            status=record.status.value,
+            item_id_name="current_brand_id",
+            item_id=brand_id,
+            next_route="/#brand-check",
+        )
         return record
 
     def get(self, brand_id: str) -> BrandAnalysisResponse:
@@ -145,10 +156,19 @@ class BrandService:
             }
         )
         _write_text(
-            self._brand_dir(brand_id) / "reviewed.json",
+            self._brand_dir(record.project_id, brand_id) / "reviewed.json",
             data.model_dump_json(indent=2),
         )
         self._save_record(updated)
+        update_project_stage(
+            self._settings,
+            record.project_id,
+            "brand",
+            status=updated.status.value,
+            item_id_name="current_brand_id",
+            item_id=brand_id,
+            next_route="/#campaign-input",
+        )
         return updated
 
     def finalize(self, brand_id: str) -> BrandMarkdownResponse:
@@ -159,7 +179,7 @@ class BrandService:
             )
 
         markdown = generate_brand_markdown(record.data)
-        _write_text(self._brand_dir(brand_id) / "brand.md", markdown)
+        _write_text(self._brand_dir(record.project_id, brand_id) / "brand.md", markdown)
         finalized = record.model_copy(
             update={
                 "status": BrandStatus.FINALIZED,
@@ -167,7 +187,17 @@ class BrandService:
             }
         )
         self._save_record(finalized)
+        update_project_stage(
+            self._settings,
+            record.project_id,
+            "brand",
+            status=finalized.status.value,
+            item_id_name="current_brand_id",
+            item_id=brand_id,
+            next_route="/#campaign-input",
+        )
         return BrandMarkdownResponse(
+            project_id=record.project_id,
             brand_id=brand_id,
             status=BrandStatus.FINALIZED,
             markdown=markdown,
@@ -175,24 +205,43 @@ class BrandService:
 
     def get_markdown(self, brand_id: str) -> BrandMarkdownResponse:
         record = self._load_record(brand_id)
-        markdown_path = self._brand_dir(brand_id) / "brand.md"
+        markdown_path = self._brand_dir(record.project_id, brand_id) / "brand.md"
         if record.status != BrandStatus.FINALIZED or not markdown_path.is_file():
             raise BrandStateError("Brand data has not been finalized")
         return BrandMarkdownResponse(
+            project_id=record.project_id,
             brand_id=brand_id,
             status=record.status,
             markdown=markdown_path.read_text(encoding="utf-8"),
         )
 
-    def _brand_dir(self, brand_id: str) -> Path:
+    def _brand_dir(self, project_id: str, brand_id: str) -> Path:
+        return project_dir(self._settings, project_id) / "brand" / brand_id
+
+    def _record_path(self, brand_id: str) -> Path:
+        record_path = self._find_record_path(brand_id)
+        if record_path:
+            return record_path
+        raise BrandNotFoundError("Brand was not found")
+
+    def _find_record_path(self, brand_id: str) -> Path | None:
         try:
             normalized = str(UUID(brand_id))
         except ValueError as exc:
             raise BrandNotFoundError("Brand was not found") from exc
-        return self._settings.storage_root / "generated" / "brands" / normalized
-
-    def _record_path(self, brand_id: str) -> Path:
-        return self._brand_dir(brand_id) / "record.json"
+        projects_root = self._settings.storage_root / "projects"
+        if not projects_root.is_dir():
+            return None
+        for record_path in projects_root.glob(f"*/brand/{normalized}/record.json"):
+            try:
+                record = BrandAnalysisResponse.model_validate_json(
+                    record_path.read_text(encoding="utf-8")
+                )
+            except ValueError:
+                continue
+            if record.brand_id == brand_id:
+                return record_path
+        return None
 
     def _load_record(self, brand_id: str) -> BrandAnalysisResponse:
         path = self._record_path(brand_id)
@@ -204,7 +253,7 @@ class BrandService:
 
     def _save_record(self, record: BrandAnalysisResponse) -> None:
         _write_text(
-            self._record_path(record.brand_id),
+            self._brand_dir(record.project_id, record.brand_id) / "record.json",
             record.model_dump_json(indent=2),
         )
 
@@ -253,8 +302,7 @@ def _validate_visual_asset(
     if asset.kind in {"logo", "icon"}:
         if suffix not in {".svg", ".png", ".jpg", ".jpeg"}:
             raise ValueError(
-                f"{asset.filename}: logo and icon files must be SVG, PNG, JPG, "
-                "or JPEG"
+                f"{asset.filename}: logo and icon files must be SVG, PNG, JPG, or JPEG"
             )
         if suffix == ".svg" and b"<svg" not in asset.data[:1024].lower():
             raise ValueError(f"{asset.filename}: file is not a valid SVG")
@@ -267,8 +315,7 @@ def _validate_visual_asset(
     if suffix != ".ttf":
         raise ValueError(f"{asset.filename}: typography files must be TTF")
     if not (
-        asset.data.startswith(b"\x00\x01\x00\x00")
-        or asset.data.startswith(b"true")
+        asset.data.startswith(b"\x00\x01\x00\x00") or asset.data.startswith(b"true")
     ):
         raise ValueError(f"{asset.filename}: file is not a valid TTF")
 

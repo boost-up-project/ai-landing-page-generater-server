@@ -27,7 +27,63 @@ HTML 웹 컴포넌트와 이미지 자산은 분석하지 않고 캠페인별 �
 - `POST /api/campaigns/{campaign_id}/finalize`: `campaign.md` 생성
 - `GET /api/campaigns/{campaign_id}/markdown`: 확정 Markdown 조회
 
+엔드포인트 경로는 유지하되, 캠페인 분석 요청에는 브랜드 분석에서 생성된
+`project_id`를 `multipart/form-data` 필드로 함께 전달한다.
+
+## 저장 경로
+
+브랜드 진입점에서 생성된 `project_id`를 기준으로 이후 단계 산출물을 같은
+프로젝트 디렉터리에 저장한다.
+
+```text
+storage/projects/{project_id}/
+  project.json
+  brand/
+    {brand_id}/
+      uploads/
+      extracted.txt
+      analyzed.json
+      reviewed.json
+      brand.md
+      record.json
+  campaign/
+    {campaign_id}/
+      uploads/
+      component/
+      assets/
+      extracted.txt
+      analyzed.json
+      reviewed.json
+      campaign.md
+      record.json
+```
+
+`brand_id`와 `campaign_id`는 각 단계 record 식별자로 유지하고, 조회 API는
+기존처럼 해당 id를 사용한다. 같은 프로젝트에서 단계를 다시 분석해도 이전 id의
+산출물은 덮어쓰지 않으며, `project.json`의 `current_brand_id`와
+`current_campaign_id`가 현재 활성 산출물을 가리킨다.
+
+동일 PDF 분석 캐시는 프로젝트 내부에서만 검색하며, 사용자가 수정할 수 있는
+`record.json` 대신 최초 AI 결과인 `analyzed.json`을 재사용한다.
+
+## 요청 및 응답
+
+`POST /api/brands/analyze` 응답에는 전체 플로우 식별자인 `project_id`가 포함된다.
+
+`POST /api/campaigns` 요청에는 다음 필드를 포함한다.
+
+- `project_id`: 브랜드 분석 응답에서 받은 프로젝트 id
+- `strategy_file`: 캠페인 전략 PDF 1개
+- `component_files`: HTML 웹 컴포넌트 파일 목록
+- `asset_files`: 이미지 파일 목록
+
+Campaign 응답에는 `project_id`, `campaign_id`, `source_checksum`,
+`reused_from_campaign_id`가 포함된다.
+
+`POST /api/campaigns/{campaign_id}/finalize` 응답에는 이후 단계 라우팅을 위해
+`next_route`로 `/#persona-input`을 포함한다.
+
 ## TODO
 
-- 브랜드, 캠페인, 이후 서비스의 저장 경로 통합은 각 기능 개발 완료 후
-  `project_id` 기반 플로우 통합 단계에서 처리한다.
+- Persona 이후 서비스도 동일한
+  `storage/projects/{project_id}/{stage}/{item_id}/` 규칙으로 확장한다.

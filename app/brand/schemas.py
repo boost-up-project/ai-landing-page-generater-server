@@ -99,6 +99,7 @@ class BrandStatus(str, Enum):
 
 
 class BrandAnalysisResponse(StrictModel):
+    project_id: str
     brand_id: str
     status: BrandStatus
     source_files: list[str]
@@ -112,6 +113,8 @@ class BrandReviewRequest(StrictModel):
 
 
 class BrandMarkdownResponse(StrictModel):
+    project_id: str
     brand_id: str
     status: BrandStatus
     markdown: str
+    next_route: str = "/#campaign-input"

@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 
 from app.brand.ai_parser import AIParserError
 from app.campaign.schemas import (
@@ -16,6 +16,7 @@ from app.campaign.service import (
 )
 from app.common.pdf import PDFParseError
 from app.core.config import Settings, get_settings
+from app.project.service import ProjectNotFoundError
 
 router = APIRouter(prefix="/campaigns", tags=["campaigns"])
 
@@ -34,6 +35,7 @@ def get_campaign_service(
 async def analyze_campaign(
     strategy_file: Annotated[list[UploadFile], File()],
     service: Annotated[CampaignService, Depends(get_campaign_service)],
+    project_id: Annotated[str, Form()],
     component_files: Annotated[list[UploadFile] | None, File()] = None,
     asset_files: Annotated[list[UploadFile] | None, File()] = None,
 ) -> CampaignAnalysisResponse:
@@ -52,6 +54,7 @@ async def analyze_campaign(
 
     try:
         return await service.analyze(
+            project_id,
             UploadedFile(filename=source_name, data=await source.read()),
             component_files=[
                 UploadedFile(
@@ -71,6 +74,10 @@ async def analyze_campaign(
     except AIParserError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
+        ) from exc
+    except ProjectNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
         ) from exc
 
 

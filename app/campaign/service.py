@@ -19,6 +19,7 @@ from app.campaign.schemas import (
 )
 from app.common.pdf import ParsedPDF, combine_parsed_pdfs, parse_pdf
 from app.core.config import Settings
+from app.project.service import ensure_project, project_dir, update_project_stage
 
 
 class CampaignNotFoundError(FileNotFoundError):
@@ -39,6 +40,12 @@ class UploadedFile:
     data: bytes
 
 
+@dataclass(frozen=True)
+class CachedCampaignAnalysis:
+    campaign_id: str
+    data: CampaignKnowledge
+
+
 class CampaignService:
     def __init__(
         self,
@@ -50,6 +57,7 @@ class CampaignService:
 
     async def analyze(
         self,
+        project_id: str,
         strategy_file: UploadedFile,
         *,
         component_files: list[UploadedFile] | None = None,
@@ -67,6 +75,7 @@ class CampaignService:
             max_files=self._settings.max_campaign_asset_files,
             max_size_bytes=self._settings.max_campaign_asset_size_bytes,
         )
+        ensure_project(self._settings, project_id)
 
         parsed = parse_pdf(
             strategy_file.data,
@@ -79,7 +88,7 @@ class CampaignService:
             max_characters=self._settings.max_extracted_characters,
         )
         source_checksum = sha256(strategy_file.data).hexdigest()
-        cached = self._find_cached_analysis(source_checksum)
+        cached = self._find_cached_analysis(project_id, source_checksum)
         reused_from_campaign_id = cached.campaign_id if cached else None
         data = (
             _copy_campaign_data_for_source(cached.data, strategy_file.filename)
@@ -91,6 +100,7 @@ class CampaignService:
         campaign_id = str(uuid4())
         now = datetime.now(timezone.utc)
         record = CampaignAnalysisResponse(
+            project_id=project_id,
             campaign_id=campaign_id,
             status=CampaignStatus.DRAFT,
             source_file=strategy_file.filename,
@@ -103,11 +113,11 @@ class CampaignService:
             updated_at=now,
         )
 
-        upload_dir = self._settings.storage_root / "uploads" / campaign_id
+        campaign_dir = self._campaign_dir(project_id, campaign_id)
+        upload_dir = campaign_dir / "uploads"
         _write_bytes(
             upload_dir / _safe_filename(strategy_file.filename), strategy_file.data
         )
-        campaign_dir = self._campaign_dir(campaign_id)
         for index, component in enumerate(components, start=1):
             _write_bytes(
                 campaign_dir
@@ -125,6 +135,15 @@ class CampaignService:
         _write_text(campaign_dir / "extracted.txt", extracted_text)
         _write_text(campaign_dir / "analyzed.json", data.model_dump_json(indent=2))
         self._save_record(record)
+        update_project_stage(
+            self._settings,
+            project_id,
+            "campaign",
+            status=record.status.value,
+            item_id_name="current_campaign_id",
+            item_id=campaign_id,
+            next_route="/#campaign-check",
+        )
         return record
 
     def get(self, campaign_id: str) -> CampaignAnalysisResponse:
@@ -151,10 +170,19 @@ class CampaignService:
             }
         )
         _write_text(
-            self._campaign_dir(campaign_id) / "reviewed.json",
+            self._campaign_dir(record.project_id, campaign_id) / "reviewed.json",
             data.model_dump_json(indent=2),
         )
         self._save_record(updated)
+        update_project_stage(
+            self._settings,
+            record.project_id,
+            "campaign",
+            status=updated.status.value,
+            item_id_name="current_campaign_id",
+            item_id=campaign_id,
+            next_route="/#persona-input",
+        )
         return updated
 
     def finalize(self, campaign_id: str) -> CampaignMarkdownResponse:
@@ -164,7 +192,10 @@ class CampaignService:
                 "Campaign data must be reviewed before it can be finalized"
             )
         markdown = generate_campaign_markdown(record.data)
-        _write_text(self._campaign_dir(campaign_id) / "campaign.md", markdown)
+        _write_text(
+            self._campaign_dir(record.project_id, campaign_id) / "campaign.md",
+            markdown,
+        )
         finalized = record.model_copy(
             update={
                 "status": CampaignStatus.FINALIZED,
@@ -172,7 +203,17 @@ class CampaignService:
             }
         )
         self._save_record(finalized)
+        update_project_stage(
+            self._settings,
+            record.project_id,
+            "campaign",
+            status=finalized.status.value,
+            item_id_name="current_campaign_id",
+            item_id=campaign_id,
+            next_route="/#persona-input",
+        )
         return CampaignMarkdownResponse(
+            project_id=record.project_id,
             campaign_id=campaign_id,
             status=CampaignStatus.FINALIZED,
             markdown=markdown,
@@ -180,19 +221,22 @@ class CampaignService:
 
     def get_markdown(self, campaign_id: str) -> CampaignMarkdownResponse:
         record = self._load_record(campaign_id)
-        markdown_path = self._campaign_dir(campaign_id) / "campaign.md"
+        markdown_path = (
+            self._campaign_dir(record.project_id, campaign_id) / "campaign.md"
+        )
         if record.status != CampaignStatus.FINALIZED or not markdown_path.is_file():
             raise CampaignStateError("Campaign data has not been finalized")
         return CampaignMarkdownResponse(
+            project_id=record.project_id,
             campaign_id=campaign_id,
             status=record.status,
             markdown=markdown_path.read_text(encoding="utf-8"),
         )
 
     def _find_cached_analysis(
-        self, source_checksum: str
-    ) -> CampaignAnalysisResponse | None:
-        root = self._settings.storage_root / "generated" / "campaigns"
+        self, project_id: str, source_checksum: str
+    ) -> CachedCampaignAnalysis | None:
+        root = project_dir(self._settings, project_id) / "campaign"
         if not root.is_dir():
             return None
 
@@ -207,34 +251,60 @@ class CampaignService:
                 )
             except ValueError:
                 continue
-            if record.source_checksum == source_checksum:
-                return record
-            if record.source_checksum:
+            checksum_matches = record.source_checksum == source_checksum
+            if not record.source_checksum:
+                source_path = self._source_path(record)
+                checksum_matches = source_path.is_file() and (
+                    sha256(source_path.read_bytes()).hexdigest() == source_checksum
+                )
+            if not checksum_matches:
                 continue
-            source_path = self._source_path(record)
-            if not source_path.is_file():
+            analyzed_path = record_path.parent / "analyzed.json"
+            if not analyzed_path.is_file():
                 continue
-            if sha256(source_path.read_bytes()).hexdigest() == source_checksum:
-                return record
+            try:
+                data = CampaignKnowledge.model_validate_json(
+                    analyzed_path.read_text(encoding="utf-8")
+                )
+            except ValueError:
+                continue
+            return CachedCampaignAnalysis(campaign_id=record.campaign_id, data=data)
         return None
 
-    def _campaign_dir(self, campaign_id: str) -> Path:
+    def _campaign_dir(self, project_id: str, campaign_id: str) -> Path:
+        return project_dir(self._settings, project_id) / "campaign" / campaign_id
+
+    def _record_path(self, campaign_id: str) -> Path:
+        record_path = self._find_record_path(campaign_id)
+        if record_path:
+            return record_path
+        raise CampaignNotFoundError("Campaign was not found")
+
+    def _find_record_path(self, campaign_id: str) -> Path | None:
         try:
             normalized = str(UUID(campaign_id))
         except ValueError as exc:
             raise CampaignNotFoundError("Campaign was not found") from exc
-        return self._settings.storage_root / "generated" / "campaigns" / normalized
+        projects_root = self._settings.storage_root / "projects"
+        if not projects_root.is_dir():
+            return None
+        for record_path in projects_root.glob(f"*/campaign/{normalized}/record.json"):
+            try:
+                record = CampaignAnalysisResponse.model_validate_json(
+                    record_path.read_text(encoding="utf-8")
+                )
+            except ValueError:
+                continue
+            if record.campaign_id == campaign_id:
+                return record_path
+        return None
 
     def _source_path(self, record: CampaignAnalysisResponse) -> Path:
         return (
-            self._settings.storage_root
+            self._campaign_dir(record.project_id, record.campaign_id)
             / "uploads"
-            / record.campaign_id
             / _safe_filename(record.source_file)
         )
-
-    def _record_path(self, campaign_id: str) -> Path:
-        return self._campaign_dir(campaign_id) / "record.json"
 
     def _load_record(self, campaign_id: str) -> CampaignAnalysisResponse:
         path = self._record_path(campaign_id)
@@ -246,7 +316,7 @@ class CampaignService:
 
     def _save_record(self, record: CampaignAnalysisResponse) -> None:
         _write_text(
-            self._record_path(record.campaign_id),
+            self._campaign_dir(record.project_id, record.campaign_id) / "record.json",
             record.model_dump_json(indent=2),
         )
 
