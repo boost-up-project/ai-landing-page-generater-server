@@ -320,6 +320,7 @@ def test_split_components_handles_figma_div_exports_and_marks_cta() -> None:
     assert 'data-editable="copy"' in fragments[1].html
     assert 'data-editable-role="cta"' in fragments[1].html
     assert 'data-editable="image"' in fragments[1].html
+    assert "/ data-editable" not in fragments[1].html
 
 
 def test_campaign_api_requires_exactly_one_pdf(tmp_path: Path) -> None:

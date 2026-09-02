@@ -326,7 +326,10 @@ def _mark_editable_targets(source: str, *, category: str) -> str:
         attrs = match.group("attrs")
         if "data-editable" in attrs.casefold():
             return match.group(0)
-        return f'<img{attrs} data-editable="image">'
+        self_closing = attrs.rstrip().endswith("/")
+        normalized_attrs = attrs.rstrip()[:-1].rstrip() if self_closing else attrs
+        closing = " />" if self_closing else ">"
+        return f'<img{normalized_attrs} data-editable="image"{closing}'
 
     return _IMAGE_TAG_PATTERN.sub(
         replace_image, _LEAF_TEXT_PATTERN.sub(replace_text, source)
