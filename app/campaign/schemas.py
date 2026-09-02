@@ -68,7 +68,10 @@ class CampaignAnalysisResponse(StrictModel):
     source_checksum: str | None = None
     reused_from_campaign_id: str | None = None
     component_files: list[str]
+    style_files: list[str] = Field(default_factory=list)
     asset_files: list[str]
+    bundle_files: list[str] = Field(default_factory=list)
+    reference_url: str | None = None
     data: CampaignKnowledge
     created_at: datetime
     updated_at: datetime

@@ -1,16 +1,21 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import sha256
+from io import BytesIO
 from pathlib import Path
 from typing import Protocol
 from uuid import UUID, uuid4
+from zipfile import BadZipFile, ZipFile
 
 from app.brand.ai_parser import AIParserError
 from app.brand.service import _safe_filename, _write_bytes, _write_text
 from app.campaign.ai_parser import GeminiCampaignParser
+from app.campaign.componentization import split_components
 from app.campaign.markdown import generate_campaign_markdown
+from app.campaign.reference import fetch_public_html, reference_layout_summary
 from app.campaign.schemas import (
     CampaignAnalysisResponse,
     CampaignKnowledge,
@@ -61,14 +66,46 @@ class CampaignService:
         strategy_file: UploadedFile,
         *,
         component_files: list[UploadedFile] | None = None,
+        style_files: list[UploadedFile] | None = None,
         asset_files: list[UploadedFile] | None = None,
+        bundle_files: list[UploadedFile] | None = None,
+        reference_url: str | None = None,
     ) -> CampaignAnalysisResponse:
         components = component_files or []
+        styles = style_files or []
         assets = asset_files or []
+        bundles = bundle_files or []
         _validate_component_files(
             components,
             max_files=self._settings.max_campaign_component_files,
             max_size_bytes=self._settings.max_campaign_component_size_bytes,
+        )
+        _validate_style_files(
+            styles,
+            max_files=self._settings.max_campaign_style_files,
+            max_size_bytes=self._settings.max_campaign_style_size_bytes,
+        )
+        _validate_bundle_files(
+            bundles,
+            max_files=self._settings.max_campaign_bundle_files,
+            max_size_bytes=self._settings.max_campaign_bundle_size_bytes,
+        )
+        bundled_components, bundled_styles, bundled_assets = _expand_bundles(
+            bundles,
+            max_entries=self._settings.max_campaign_bundle_entries,
+        )
+        components = [*components, *bundled_components]
+        styles = [*styles, *bundled_styles]
+        assets = [*assets, *bundled_assets]
+        _validate_component_files(
+            components,
+            max_files=self._settings.max_campaign_component_files,
+            max_size_bytes=self._settings.max_campaign_component_size_bytes,
+        )
+        _validate_style_files(
+            styles,
+            max_files=self._settings.max_campaign_style_files,
+            max_size_bytes=self._settings.max_campaign_style_size_bytes,
         )
         _validate_asset_files(
             assets,
@@ -76,6 +113,13 @@ class CampaignService:
             max_size_bytes=self._settings.max_campaign_asset_size_bytes,
         )
         ensure_project(self._settings, project_id)
+        resolved_reference_url = None
+        reference_source = ""
+        if reference_url:
+            resolved_reference_url, reference_source = await fetch_public_html(
+                reference_url,
+                max_size_bytes=self._settings.max_campaign_reference_size_bytes,
+            )
 
         parsed = parse_pdf(
             strategy_file.data,
@@ -106,8 +150,11 @@ class CampaignService:
             source_file=strategy_file.filename,
             source_checksum=source_checksum,
             reused_from_campaign_id=reused_from_campaign_id,
-            component_files=[item.filename for item in components],
-            asset_files=[item.filename for item in assets],
+            component_files=[],
+            style_files=[item.filename for item in styles],
+            asset_files=[],
+            bundle_files=[item.filename for item in bundles],
+            reference_url=resolved_reference_url,
             data=data,
             created_at=now,
             updated_at=now,
@@ -121,9 +168,17 @@ class CampaignService:
         for index, component in enumerate(components, start=1):
             _write_bytes(
                 campaign_dir
-                / "component"
+                / "uploads"
+                / "components"
                 / f"{index:02d}_{_safe_filename(component.filename)}",
                 component.data,
+            )
+        for index, style in enumerate(styles, start=1):
+            _write_bytes(
+                campaign_dir
+                / "styles"
+                / f"{index:02d}_{_safe_filename(style.filename)}",
+                style.data,
             )
         for index, asset in enumerate(assets, start=1):
             _write_bytes(
@@ -132,6 +187,42 @@ class CampaignService:
                 / f"{index:02d}_{_safe_filename(asset.filename)}",
                 asset.data,
             )
+        for index, bundle in enumerate(bundles, start=1):
+            _write_bytes(
+                campaign_dir
+                / "uploads"
+                / "bundles"
+                / f"{index:02d}_{_safe_filename(bundle.filename)}",
+                bundle.data,
+            )
+        if reference_source:
+            _write_text(campaign_dir / "reference" / "source.html", reference_source)
+            _write_text(
+                campaign_dir / "reference" / "summary.json",
+                json.dumps(
+                    reference_layout_summary(reference_source), ensure_ascii=False
+                ),
+            )
+        asset_names = {
+            Path(item.filename).name: f"{index:02d}_{_safe_filename(item.filename)}"
+            for index, item in enumerate(assets, start=1)
+        }
+        shared_styles = "\n".join(item.data.decode("utf-8") for item in styles)
+        normalized_components = []
+        for component in components:
+            normalized_components.extend(
+                split_components(
+                    component.data.decode("utf-8"),
+                    component.filename,
+                    shared_styles=shared_styles,
+                    asset_names=asset_names,
+                )
+            )
+        for index, component in enumerate(normalized_components, start=1):
+            stored_name = f"{index:02d}_{_safe_filename(component.name)}.html"
+            _write_text(campaign_dir / "component" / stored_name, component.html)
+            record.component_files.append(stored_name)
+        record.asset_files = list(asset_names.values())
         _write_text(campaign_dir / "extracted.txt", extracted_text)
         _write_text(campaign_dir / "analyzed.json", data.model_dump_json(indent=2))
         self._save_record(record)
@@ -343,6 +434,85 @@ def _validate_component_files(
             item.data.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise ValueError(f"{item.filename}: HTML must be UTF-8 encoded") from exc
+
+
+def _validate_style_files(
+    files: list[UploadedFile], *, max_files: int, max_size_bytes: int
+) -> None:
+    if len(files) > max_files:
+        raise ValueError(f"A maximum of {max_files} CSS files is allowed")
+    for item in files:
+        if not item.data:
+            raise ValueError(f"{item.filename}: CSS file is empty")
+        if len(item.data) > max_size_bytes:
+            raise ValueError(
+                f"{item.filename}: file exceeds the {max_size_bytes}-byte limit"
+            )
+        if Path(item.filename).suffix.lower() != ".css":
+            raise ValueError(f"{item.filename}: style files must be CSS")
+        try:
+            item.data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"{item.filename}: CSS must be UTF-8 encoded") from exc
+
+
+def _validate_bundle_files(
+    files: list[UploadedFile], *, max_files: int, max_size_bytes: int
+) -> None:
+    if len(files) > max_files:
+        raise ValueError(f"A maximum of {max_files} ZIP bundles is allowed")
+    for item in files:
+        if not item.data:
+            raise ValueError(f"{item.filename}: ZIP bundle is empty")
+        if len(item.data) > max_size_bytes:
+            raise ValueError(
+                f"{item.filename}: file exceeds the {max_size_bytes}-byte limit"
+            )
+        if Path(item.filename).suffix.lower() != ".zip":
+            raise ValueError(f"{item.filename}: bundle files must be ZIP")
+
+
+def _expand_bundles(
+    bundles: list[UploadedFile], *, max_entries: int
+) -> tuple[list[UploadedFile], list[UploadedFile], list[UploadedFile]]:
+    components: list[UploadedFile] = []
+    styles: list[UploadedFile] = []
+    assets: list[UploadedFile] = []
+    for bundle in bundles:
+        try:
+            with ZipFile(BytesIO(bundle.data)) as archive:
+                entries = [item for item in archive.infolist() if not item.is_dir()]
+                if len(entries) > max_entries:
+                    raise ValueError(
+                        f"{bundle.filename}: ZIP contains more than {max_entries} files"
+                    )
+                for item in entries:
+                    member = Path(item.filename)
+                    if member.is_absolute() or ".." in member.parts:
+                        raise ValueError(
+                            f"{bundle.filename}: ZIP contains an unsafe path"
+                        )
+                    if (
+                        item.is_dir()
+                        or (item.external_attr >> 16) & 0o170000 == 0o120000
+                    ):
+                        raise ValueError(
+                            f"{bundle.filename}: ZIP contains an unsupported link"
+                        )
+                    suffix = member.suffix.lower()
+                    data = archive.read(item)
+                    filename = member.name
+                    if suffix in {".html", ".htm"}:
+                        components.append(UploadedFile(filename, data))
+                    elif suffix == ".css":
+                        styles.append(UploadedFile(filename, data))
+                    elif suffix in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
+                        assets.append(UploadedFile(filename, data))
+        except BadZipFile as exc:
+            raise ValueError(
+                f"{bundle.filename}: bundle is not a valid ZIP file"
+            ) from exc
+    return components, styles, assets
 
 
 def _validate_asset_files(

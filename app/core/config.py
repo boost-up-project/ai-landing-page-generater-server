@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     max_visual_asset_size_bytes: int = 20 * 1024 * 1024
     max_campaign_component_files: int = 20
     max_campaign_component_size_bytes: int = 5 * 1024 * 1024
+    max_campaign_style_files: int = 20
+    max_campaign_style_size_bytes: int = 2 * 1024 * 1024
+    max_campaign_bundle_files: int = 5
+    max_campaign_bundle_size_bytes: int = 20 * 1024 * 1024
+    max_campaign_bundle_entries: int = 100
+    max_campaign_reference_size_bytes: int = 2 * 1024 * 1024
     max_campaign_asset_files: int = 50
     max_campaign_asset_size_bytes: int = 20 * 1024 * 1024
 

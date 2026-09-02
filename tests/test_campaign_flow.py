@@ -7,6 +7,7 @@ import pymupdf
 import pytest
 from fastapi.testclient import TestClient
 
+from app.campaign.componentization import split_components
 from app.campaign.router import get_campaign_service
 from app.campaign.schemas import (
     CampaignKnowledge,
@@ -93,9 +94,12 @@ async def test_campaign_service_stores_files_and_creates_draft(tmp_path: Path) -
     assert "[SOURCE_FILE: strategy.pdf]" in parser.extracted_text
     assert parser.calls == 1
     root = tmp_path / "projects" / project_id / "campaign" / result.campaign_id
-    assert (root / "component" / "01_hero.html").read_text() == (
-        "<section>Hero</section>"
-    )
+    assert result.component_files == ["01_Hero.html"]
+    normalized = (root / "component" / result.component_files[0]).read_text()
+    assert 'data-component-name="Hero"' in normalized
+    assert 'data-layout-options="source media-left media-right media-top"' in normalized
+    assert "data-component-layout-runtime" in normalized
+    assert (root / "uploads" / "components" / "01_hero.html").is_file()
     assert (root / "assets" / "01_hero.png").is_file()
     assert (root / "uploads" / "strategy.pdf").is_file()
     project_record = json.loads(
@@ -265,9 +269,31 @@ def test_campaign_api_accepts_pdf_components_and_assets(tmp_path: Path) -> None:
     body = response.json()
     assert body["status"] == "draft"
     assert body["project_id"] == project_id
-    assert body["component_files"] == ["card.html"]
-    assert body["asset_files"] == ["card.jpg"]
+    assert body["component_files"] == ["01_Card 1.html"]
+    assert body["asset_files"] == ["01_card.jpg"]
     assert len(body["data"]) == 8
+
+
+def test_split_components_keeps_every_outer_section_and_removes_unsafe_markup() -> None:
+    fragments = split_components(
+        """
+        <html><head><script>alert('never run')</script><style>.hero{color:red}</style></head>
+        <body><header class="hero" onclick="bad()"><h1>Title</h1></header>
+        <section><img src="room.png" onerror="bad()"><a href="javascript:bad()">More</a></section>
+        <footer>Footer</footer></body></html>
+        """,
+        "source.html",
+        asset_names={"room.png": "01_room.png"},
+    )
+
+    assert len(fragments) == 3
+    joined = "\n".join(fragment.html for fragment in fragments)
+    assert "<script" not in joined
+    assert "onclick" not in joined
+    assert "onerror" not in joined
+    assert "javascript:" not in joined
+    assert 'src="asset://01_room.png"' in joined
+    assert all("data-layout-options" in fragment.html for fragment in fragments)
 
 
 def test_campaign_api_requires_exactly_one_pdf(tmp_path: Path) -> None:

@@ -37,7 +37,10 @@ async def analyze_campaign(
     service: Annotated[CampaignService, Depends(get_campaign_service)],
     project_id: Annotated[str, Form()],
     component_files: Annotated[list[UploadFile] | None, File()] = None,
+    style_files: Annotated[list[UploadFile] | None, File()] = None,
     asset_files: Annotated[list[UploadFile] | None, File()] = None,
+    bundle_files: Annotated[list[UploadFile] | None, File()] = None,
+    reference_url: Annotated[str | None, Form()] = None,
 ) -> CampaignAnalysisResponse:
     if len(strategy_file) != 1:
         raise HTTPException(
@@ -51,6 +54,11 @@ async def analyze_campaign(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"{source_name}: only PDF files are supported",
         )
+    if not component_files:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="At least one HTML component is required",
+        )
 
     try:
         return await service.analyze(
@@ -62,10 +70,23 @@ async def analyze_campaign(
                 )
                 for item in component_files or []
             ],
+            style_files=[
+                UploadedFile(
+                    filename=item.filename or "style.css", data=await item.read()
+                )
+                for item in style_files or []
+            ],
             asset_files=[
                 UploadedFile(filename=item.filename or "asset", data=await item.read())
                 for item in asset_files or []
             ],
+            bundle_files=[
+                UploadedFile(
+                    filename=item.filename or "assets.zip", data=await item.read()
+                )
+                for item in bundle_files or []
+            ],
+            reference_url=reference_url,
         )
     except (ValueError, PDFParseError) as exc:
         raise HTTPException(
