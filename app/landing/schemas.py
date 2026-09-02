@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -64,6 +65,7 @@ class LandingPage(StrictModel):
 class LandingAsset(StrictModel):
     filename: str
     content_type: str
+    source: Literal["campaign", "landing"] = "campaign"
 
 
 class LandingStatus(str, Enum):
@@ -85,6 +87,17 @@ class CopyCandidateRequest(StrictModel):
 
 class CopyCandidateResponse(StrictModel):
     candidates: list[str] = Field(min_length=3, max_length=3)
+
+
+class ImageGenerateRequest(StrictModel):
+    persona_key: str
+    instance_id: str
+    editable_index: int = Field(ge=0)
+    prompt: str = Field(min_length=1, max_length=2000)
+    alt: str = Field(default="", max_length=500)
+    aspect_ratio: Literal[
+        "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"
+    ] = "16:9"
 
 
 class LandingResponse(StrictModel):

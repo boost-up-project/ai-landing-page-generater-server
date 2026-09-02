@@ -8,7 +8,7 @@ from typing import Any, Protocol
 from uuid import UUID, uuid4
 
 from app.brand.ai_parser import AIParserError
-from app.brand.service import _write_text
+from app.brand.service import _safe_filename, _write_bytes, _write_text
 from app.core.config import Settings
 from app.landing.ai_parser import GeminiLandingParser
 from app.landing.html import (
@@ -21,6 +21,7 @@ from app.landing.schemas import (
     ComponentTemplate,
     CopyCandidateRequest,
     CopyCandidateResponse,
+    ImageGenerateRequest,
     LandingAsset,
     LandingComponent,
     LandingPage,
@@ -61,6 +62,17 @@ class LandingParser(Protocol):
         brand_context: str,
         campaign_context: str,
     ) -> CopyCandidateResponse: ...
+
+    async def generate_image(
+        self,
+        *,
+        prompt: str,
+        persona_name: str,
+        page_intent: str,
+        brand_context: str,
+        campaign_context: str,
+        aspect_ratio: str,
+    ) -> tuple[str, bytes]: ...
 
 
 class LandingService:
@@ -179,13 +191,100 @@ class LandingService:
             ),
         )
 
+    def upload_asset(
+        self,
+        landing_id: str,
+        *,
+        filename: str,
+        content_type: str,
+        data: bytes,
+    ) -> LandingAsset:
+        if not data:
+            raise LandingStateError("Uploaded image is empty")
+        if len(data) > self._settings.max_campaign_asset_size_bytes:
+            raise LandingStateError("Uploaded image exceeds the size limit")
+        safe_name = _safe_filename(filename)
+        guessed_type = mimetypes.guess_type(safe_name)[0] or content_type
+        if guessed_type not in {"image/png", "image/jpeg", "image/gif", "image/webp"}:
+            raise LandingStateError("PNG, JPG, GIF, or WEBP image is required")
+        suffix = (
+            Path(safe_name).suffix.lower()
+            or mimetypes.guess_extension(guessed_type)
+            or ".png"
+        )
+        asset = LandingAsset(
+            filename=f"upload-{uuid4().hex}{suffix}",
+            content_type=guessed_type,
+            source="landing",
+        )
+        record = self._load_record(landing_id)
+        _write_bytes(
+            project_dir(self._settings, record.project_id)
+            / "landing"
+            / landing_id
+            / "assets"
+            / asset.filename,
+            data,
+        )
+        record.assets.append(asset)
+        record.updated_at = datetime.now(timezone.utc)
+        self._save_record(record)
+        return asset
+
+    async def generate_image_asset(
+        self,
+        landing_id: str,
+        request: ImageGenerateRequest,
+    ) -> LandingAsset:
+        record = self._load_record(landing_id)
+        page = next(
+            (item for item in record.pages if item.persona_key == request.persona_key),
+            None,
+        )
+        if page is None:
+            raise LandingStateError("Landing persona page was not found")
+        root = project_dir(self._settings, record.project_id)
+        project_record = _load_json(root / "project.json")
+        content_type, data = await self._parser.generate_image(
+            prompt=request.prompt,
+            persona_name=page.persona_name,
+            page_intent=page.ai_intent,
+            brand_context=_stage_markdown(
+                root, project_record, "brand", "current_brand_id", "brand.md"
+            ),
+            campaign_context=_stage_markdown(
+                root, project_record, "campaign", "current_campaign_id", "campaign.md"
+            ),
+            aspect_ratio=request.aspect_ratio,
+        )
+        suffix = mimetypes.guess_extension(content_type) or ".png"
+        if suffix == ".jpe":
+            suffix = ".jpg"
+        asset = LandingAsset(
+            filename=f"generated-{uuid4().hex}{suffix}",
+            content_type=content_type,
+            source="landing",
+        )
+        _write_bytes(
+            root / "landing" / landing_id / "assets" / asset.filename,
+            data,
+        )
+        record.assets.append(asset)
+        record.updated_at = datetime.now(timezone.utc)
+        self._save_record(record)
+        return asset
+
     def asset_path(self, landing_id: str, filename: str) -> Path:
         record = self._load_record(landing_id)
-        allowed = {asset.filename for asset in record.assets}
-        if filename not in allowed:
+        asset = next((item for item in record.assets if item.filename == filename), None)
+        if asset is None:
             raise LandingNotFoundError("Landing asset was not found")
         root = project_dir(self._settings, record.project_id)
-        path = root / "campaign" / record.source_campaign_id / "assets" / filename
+        path = (
+            root / "landing" / landing_id / "assets" / filename
+            if asset.source == "landing"
+            else root / "campaign" / record.source_campaign_id / "assets" / filename
+        )
         if not path.is_file():
             raise LandingNotFoundError("Landing asset was not found")
         return path

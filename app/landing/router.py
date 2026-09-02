@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 
 from app.brand.ai_parser import AIParserError
@@ -8,6 +8,8 @@ from app.core.config import Settings, get_settings
 from app.landing.schemas import (
     CopyCandidateRequest,
     CopyCandidateResponse,
+    ImageGenerateRequest,
+    LandingAsset,
     LandingCreateRequest,
     LandingResponse,
 )
@@ -61,6 +63,41 @@ async def generate_copy_candidates(
 ) -> CopyCandidateResponse:
     try:
         return await service.copy_candidates(landing_id, request)
+    except LandingNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except LandingStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except AIParserError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/{landing_id}/assets/upload", response_model=LandingAsset)
+async def upload_landing_asset(
+    landing_id: str,
+    file: Annotated[UploadFile, File(...)],
+    service: Annotated[LandingService, Depends(get_landing_service)],
+) -> LandingAsset:
+    try:
+        return service.upload_asset(
+            landing_id,
+            filename=file.filename or "upload.png",
+            content_type=file.content_type or "application/octet-stream",
+            data=await file.read(),
+        )
+    except LandingNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except LandingStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/{landing_id}/assets/generate", response_model=LandingAsset)
+async def generate_landing_asset(
+    landing_id: str,
+    request: ImageGenerateRequest,
+    service: Annotated[LandingService, Depends(get_landing_service)],
+) -> LandingAsset:
+    try:
+        return await service.generate_image_asset(landing_id, request)
     except LandingNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except LandingStateError as exc:

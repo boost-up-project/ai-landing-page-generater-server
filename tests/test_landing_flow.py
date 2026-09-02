@@ -13,6 +13,7 @@ from app.landing.schemas import (
     CopyCandidateRequest,
     CopyCandidateResponse,
     EditableImage,
+    ImageGenerateRequest,
     LandingComponentSelection,
     LandingPagePlan,
     LandingPlan,
@@ -60,6 +61,9 @@ class FakeLandingParser:
                 "내 예산에 맞춘 첫 번째 공간",
             ]
         )
+
+    async def generate_image(self, **_: object) -> tuple[str, bytes]:
+        return "image/png", b"generated-image"
 
 
 def make_project(settings: Settings) -> str:
@@ -158,6 +162,28 @@ async def test_landing_service_creates_persona_page_without_structure_changes(
         ),
     )
     assert len(candidates.candidates) == 3
+
+    uploaded = service.upload_asset(
+        result.landing_id,
+        filename="new-room.png",
+        content_type="image/png",
+        data=b"uploaded-image",
+    )
+    assert uploaded.source == "landing"
+    assert service.asset_path(result.landing_id, uploaded.filename).read_bytes() == b"uploaded-image"
+
+    generated = await service.generate_image_asset(
+        result.landing_id,
+        ImageGenerateRequest(
+            persona_key="persona-a",
+            instance_id=result.pages[0].components[0].instance_id,
+            editable_index=0,
+            prompt="햇살이 드는 작은 거실",
+            aspect_ratio="16:9",
+        ),
+    )
+    assert generated.source == "landing"
+    assert service.asset_path(result.landing_id, generated.filename).read_bytes() == b"generated-image"
 
 
 def test_landing_api_creates_page_and_serves_campaign_asset(tmp_path: Path) -> None:

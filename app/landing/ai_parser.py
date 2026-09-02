@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 from typing import Any
@@ -134,6 +135,72 @@ class GeminiLandingParser:
             )
         except (ValueError, KeyError, TypeError, ValidationError) as exc:
             raise AIParserError("Gemini returned invalid copy candidates") from exc
+
+    async def generate_image(
+        self,
+        *,
+        prompt: str,
+        persona_name: str,
+        page_intent: str,
+        brand_context: str,
+        campaign_context: str,
+        aspect_ratio: str,
+    ) -> tuple[str, bytes]:
+        if not self._settings.gemini_api_key:
+            raise AIParserError("GEMINI_API_KEY is not configured")
+        if not self._settings.gemini_image_model:
+            raise AIParserError("GEMINI_IMAGE_MODEL is not configured")
+        image_prompt = (
+            "Create one polished campaign landing-page image. "
+            "Do not add logos, watermarks, UI chrome, or text unless explicitly requested.\n\n"
+            f"[BRAND_CONTEXT]\n{brand_context}\n\n"
+            f"[CAMPAIGN_CONTEXT]\n{campaign_context}\n\n"
+            f"[PERSONA]\n{persona_name}\n\n"
+            f"[PAGE_INTENT]\n{page_intent}\n\n"
+            f"[USER_REQUEST]\n{prompt}"
+        )
+        payload = {
+            "contents": [{"role": "user", "parts": [{"text": image_prompt}]}],
+            "generationConfig": {
+                "responseModalities": ["IMAGE"],
+                "responseFormat": {
+                    "image": {"aspectRatio": aspect_ratio, "imageSize": "1K"}
+                },
+            },
+        }
+        try:
+            async with httpx.AsyncClient(
+                base_url=self._settings.gemini_base_url.rstrip("/"),
+                timeout=self._settings.gemini_timeout_seconds,
+            ) as client:
+                response = await client.post(
+                    f"/models/{self._settings.gemini_image_model}:generateContent",
+                    headers={
+                        "x-goog-api-key": self._settings.gemini_api_key,
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                )
+        except httpx.HTTPError as exc:
+            raise AIParserError("Could not reach the Gemini image API") from exc
+        if response.is_error:
+            raise AIParserError(
+                f"Gemini image API returned {response.status_code}: {response.text}"
+            )
+        for candidate in response.json().get("candidates", []):
+            for part in candidate.get("content", {}).get("parts", []):
+                inline_data = part.get("inlineData") or part.get("inline_data")
+                if isinstance(inline_data, dict) and inline_data.get("data"):
+                    try:
+                        return (
+                            inline_data.get("mimeType")
+                            or inline_data.get("mime_type")
+                            or "image/png",
+                            base64.b64decode(inline_data["data"], validate=True),
+                        )
+                    except (ValueError, TypeError) as exc:
+                        raise AIParserError("Gemini returned invalid image data") from exc
+        raise AIParserError("Gemini response did not contain an image")
 
 
 def _extract_gemini_text(response_body: dict[str, Any]) -> str:
