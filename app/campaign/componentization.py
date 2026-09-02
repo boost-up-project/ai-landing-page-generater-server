@@ -33,6 +33,17 @@ _ASSET_URL_PATTERN = re.compile(
     r"(?P<attribute>\b(?:src|poster)\s*=\s*)(?P<quote>['\"])(?P<value>[^'\"]+)(?P=quote)",
     re.IGNORECASE,
 )
+_DATA_LAYER_PATTERN = re.compile(
+    r"\bdata-layer\s*=\s*(['\"])(?P<value>.*?)\1", re.IGNORECASE | re.DOTALL
+)
+_FONT_SIZE_PATTERN = re.compile(r"font-size:\s*(?P<size>[\d.]+)px", re.IGNORECASE)
+_LEAF_TEXT_PATTERN = re.compile(
+    r"<(?P<tag>div|p|span|a|button|h[1-6])\b(?P<attrs>[^>]*)>"
+    r"(?P<content>(?:(?!</?(?:div|p|span|a|button|h[1-6])\b)[\s\S])*)"
+    r"</(?P=tag)\s*>",
+    re.IGNORECASE,
+)
+_IMAGE_TAG_PATTERN = re.compile(r"<img\b(?P<attrs>[^>]*)>", re.IGNORECASE)
 
 _SECTION_TAGS = {"header", "section", "article", "footer"}
 _VOID_TAGS = {
@@ -101,7 +112,7 @@ def split_components(
     body = body_match.group("content") if body_match else cleaned
     inline_styles = "\n".join(_STYLE_PATTERN.findall(cleaned))
     body = _STYLE_PATTERN.sub("", body).strip()
-    fragments = _outer_sections(body) or [body]
+    fragments = _outer_sections(body) or _figma_sections(body) or [body]
     base_name = Path(filename).stem.replace("_", " ").replace("-", " ").strip()
     all_styles = "\n".join(value for value in [inline_styles, shared_styles] if value)
     asset_names = asset_names or {}
@@ -112,7 +123,9 @@ def split_components(
             continue
         name, category = _component_identity(fragment, base_name, index)
         decorated = _decorate_root(
-            _rewrite_asset_urls(fragment, asset_names),
+            _mark_editable_targets(
+                _rewrite_asset_urls(fragment, asset_names), category=category
+            ),
             name=name,
             category=category,
             layout_options=_layout_options(category),
@@ -148,6 +161,51 @@ def _outer_sections(source: str) -> list[str]:
     return sections
 
 
+def _figma_sections(source: str) -> list[str]:
+    """Split a Figma-exported div tree into visible horizontal blocks.
+
+    Figma's HTML export contains only nested ``div`` elements with inline styles,
+    so semantic-tag splitting cannot see its sections.  We first take the visual
+    root's direct children and open an oversized layout wrapper by one more level.
+    """
+    children = _direct_children(source)
+    if len(children) < 2:
+        return []
+    sections: list[str] = []
+    for child in children:
+        nested = _direct_children(child)
+        if len(child) > 4_000 and 2 <= len(nested) <= 12:
+            sections.extend(nested)
+        else:
+            sections.append(child)
+    return [section for section in sections if _meaningful(section)]
+
+
+def _direct_children(source: str) -> list[str]:
+    """Return complete markup for direct children of the first non-void root tag."""
+    matches = list(_TAG_PATTERN.finditer(source))
+    stack: list[tuple[str, int]] = []
+    root_seen = False
+    children: list[str] = []
+    for match in matches:
+        token = match.group(0)
+        tag = match.group(1).casefold()
+        closing = token.startswith("</")
+        self_closing = token.rstrip().endswith("/>") or tag in _VOID_TAGS
+        if closing:
+            if not stack:
+                continue
+            _opened_tag, opened_start = stack.pop()
+            if root_seen and len(stack) == 1:
+                children.append(source[opened_start : match.end()].strip())
+            continue
+        if not root_seen:
+            root_seen = True
+        if not self_closing:
+            stack.append((tag, match.start()))
+    return children
+
+
 def _meaningful(fragment: str) -> bool:
     return bool(re.sub(r"<[^>]+>", "", fragment).strip()) or bool(
         re.search(r"<(?:img|picture|video|svg|button|a)\b", fragment, re.IGNORECASE)
@@ -156,9 +214,15 @@ def _meaningful(fragment: str) -> bool:
 
 def _component_identity(fragment: str, base_name: str, index: int) -> tuple[str, str]:
     lower = fragment.casefold()
+    layer = _data_layer(fragment)
+    if re.search(r"(?:nav|navbar|utility|header)", lower):
+        return layer or "Navigation", "navigation"
     if re.search(r"\b(?:hero|visual|kv|masthead)\b", lower) or "<h1" in lower:
         return "Hero", "hero"
-    if re.search(r"\b(?:cta|action|signup|apply|purchase|buy)\b", lower):
+    if re.search(
+        r"\b(?:cta|action|signup|apply|purchase|buy)\b|가입|구매|장바구니|신청|시작",
+        lower,
+    ):
         return "CTA", "cta"
     if re.search(r"\b(?:proof|review|testimonial|rating|spec|faq)\b", lower):
         return "Proof", "proof"
@@ -168,12 +232,25 @@ def _component_identity(fragment: str, base_name: str, index: int) -> tuple[str,
     return f"{label.title()} {index}", "content"
 
 
+def _data_layer(source: str) -> str:
+    match = _DATA_LAYER_PATTERN.search(source)
+    if not match:
+        return ""
+    value = html.unescape(match.group("value")).strip()
+    return (
+        ""
+        if re.fullmatch(r"(?:frame|wrap|text)(?:\s+\d+)?", value, re.IGNORECASE)
+        else value
+    )
+
+
 def _layout_options(category: str) -> str:
     options = {
         "hero": "source media-left media-right media-top",
         "cta": "source inline centered",
         "proof": "source proof-first cards",
         "benefit": "source media-left media-right stacked",
+        "navigation": "source",
         "content": "source compact spacious",
     }
     return options.get(category, "source")
@@ -217,3 +294,45 @@ def _rewrite_asset_urls(source: str, asset_names: dict[str, str]) -> str:
         return f'{match.group("attribute")}"asset://{html.escape(mapped, quote=True)}"'
 
     return _ASSET_URL_PATTERN.sub(replace, source)
+
+
+def _mark_editable_targets(source: str, *, category: str) -> str:
+    """Expose marketing text, CTA labels, and images from raw Figma HTML to the editor."""
+    if category == "navigation":
+        return source
+
+    def replace_text(match: re.Match[str]) -> str:
+        attrs = match.group("attrs")
+        if "data-editable" in attrs.casefold():
+            return match.group(0)
+        content = re.sub(r"<br\s*/?>", " ", match.group("content"), flags=re.IGNORECASE)
+        text = html.unescape(re.sub(r"<[^>]+>", "", content)).strip()
+        if not text:
+            return match.group(0)
+        layer = _data_layer(match.group(0)).casefold()
+        size = _font_size(attrs)
+        cta = bool(
+            re.search(r"가입|구매|장바구니|신청|시작|보기|혜택", layer + " " + text)
+        )
+        if size < 16 and not cta:
+            return match.group(0)
+        role = "cta" if cta else "copy"
+        return (
+            f'<{match.group("tag")}{attrs} data-editable="copy" '
+            f'data-editable-role="{role}">{match.group("content")}</{match.group("tag")}>'
+        )
+
+    def replace_image(match: re.Match[str]) -> str:
+        attrs = match.group("attrs")
+        if "data-editable" in attrs.casefold():
+            return match.group(0)
+        return f'<img{attrs} data-editable="image">'
+
+    return _IMAGE_TAG_PATTERN.sub(
+        replace_image, _LEAF_TEXT_PATTERN.sub(replace_text, source)
+    )
+
+
+def _font_size(attributes: str) -> float:
+    match = _FONT_SIZE_PATTERN.search(attributes)
+    return float(match.group("size")) if match else 0

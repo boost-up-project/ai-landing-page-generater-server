@@ -36,6 +36,7 @@ class LandingPlan(StrictModel):
 class EditableTarget(StrictModel):
     kind: str
     current_value: str
+    role: str = "copy"
 
 
 class ComponentTemplate(StrictModel):

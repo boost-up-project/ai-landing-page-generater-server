@@ -35,11 +35,16 @@ def inspect_editable_targets(source: str) -> list[EditableTarget]:
             current_value=html_module.unescape(
                 _strip_tags(match.group("content"))
             ).strip(),
+            role=_attribute(match.group(1), "data-editable-role") or "copy",
         )
         for match in COPY_PATTERN.finditer(source)
     ]
     targets.extend(
-        EditableTarget(kind="image", current_value=_attribute(match.group(0), "src"))
+        EditableTarget(
+            kind="image",
+            current_value=_attribute(match.group(0), "src"),
+            role="image",
+        )
         for match in IMAGE_PATTERN.finditer(source)
     )
     return targets

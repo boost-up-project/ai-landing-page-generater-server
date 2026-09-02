@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 
 from app.brand.ai_parser import AIParserError
 from app.brand.service import _safe_filename, _write_bytes, _write_text
+from app.campaign.componentization import split_components
 from app.core.config import Settings
 from app.landing.ai_parser import GeminiLandingParser
 from app.landing.html import (
@@ -410,20 +411,33 @@ def _load_templates(component_dir: Path) -> list[ComponentTemplate]:
     templates: list[ComponentTemplate] = []
     if not component_dir.is_dir():
         return templates
-    for index, path in enumerate(sorted(component_dir.glob("*.htm*")), start=1):
+    template_index = 0
+    for path in sorted(component_dir.glob("*.htm*")):
         source = path.read_text(encoding="utf-8")
-        name, category = component_metadata(source, path.name)
-        templates.append(
-            ComponentTemplate(
-                template_id=f"component-{index}",
-                name=name,
-                category=category,
-                filename=path.name,
-                html=source,
-                editable_targets=inspect_editable_targets(source),
-                layout_options=component_layout_options(source),
-            )
+        fragments = (
+            [source]
+            if "data-component-name" in source
+            else [fragment.html for fragment in split_components(source, path.name)]
         )
+        for fragment_index, fragment in enumerate(fragments, start=1):
+            template_index += 1
+            name, category = component_metadata(fragment, path.name)
+            filename = (
+                path.name
+                if len(fragments) == 1
+                else f"{path.stem}-{fragment_index}.html"
+            )
+            templates.append(
+                ComponentTemplate(
+                    template_id=f"component-{template_index}",
+                    name=name,
+                    category=category,
+                    filename=filename,
+                    html=fragment,
+                    editable_targets=inspect_editable_targets(fragment),
+                    layout_options=component_layout_options(fragment),
+                )
+            )
     return templates
 
 

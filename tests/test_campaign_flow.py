@@ -296,6 +296,32 @@ def test_split_components_keeps_every_outer_section_and_removes_unsafe_markup() 
     assert all("data-layout-options" in fragment.html for fragment in fragments)
 
 
+def test_split_components_handles_figma_div_exports_and_marks_cta() -> None:
+    fragments = split_components(
+        """
+        <div data-layer="Landing page" style="display:inline-flex; flex-direction:column">
+          <div data-layer="top_navbar_01" style="align-self:stretch; display:flex">
+            <div data-layer="KR" style="font-size:12px">KR</div>
+          </div>
+          <div data-layer="Sale hero" style="align-self:stretch; display:flex">
+            <div data-layer="headline" style="font-size:32px">필요한 수납을 만나는 시간</div>
+            <div data-layer="join CTA" style="font-size:10px">멤버십 가입하고 혜택 받기</div>
+            <img data-layer="hero image" src="room.png">
+          </div>
+        </div>
+        """,
+        "figma-export.html",
+    )
+
+    assert len(fragments) == 2
+    assert fragments[0].category == "navigation"
+    assert "data-editable" not in fragments[0].html
+    assert fragments[1].category == "hero"
+    assert 'data-editable="copy"' in fragments[1].html
+    assert 'data-editable-role="cta"' in fragments[1].html
+    assert 'data-editable="image"' in fragments[1].html
+
+
 def test_campaign_api_requires_exactly_one_pdf(tmp_path: Path) -> None:
     settings = Settings(storage_root=tmp_path)
     project_id = make_project(settings)

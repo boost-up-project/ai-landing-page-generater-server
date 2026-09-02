@@ -22,3 +22,5 @@ Rules:
 9. REFERENCE_LAYOUT is a structural hint from an optional public URL. Prefer its overall
    rhythm when choosing the supplied order and layout variants, but do not copy content
    or create new components from it.
+10. Every editable target with role "cta" is a conversion action. Make its copy distinct
+    for each persona by reflecting that persona's need, purchase barrier, and next action.
