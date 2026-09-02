@@ -104,9 +104,17 @@ class LandingService:
         if persona_record.status != PersonaStatus.FINALIZED:
             raise LandingStateError("Persona data must be finalized first")
 
-        templates = _load_templates(campaign_dir / "component")
-        if not templates:
+        all_templates = _load_templates(campaign_dir / "component")
+        if not all_templates:
             raise LandingStateError("At least one campaign HTML component is required")
+        header_templates = [
+            item for item in all_templates if item.category == "navigation"
+        ]
+        templates = [
+            item for item in all_templates if item.category != "navigation"
+        ]
+        if not templates:
+            raise LandingStateError("At least one campaign body component is required")
         assets, asset_paths = _load_assets(campaign_dir / "assets")
         personas = [
             {
@@ -140,7 +148,13 @@ class LandingService:
             asset_filenames=[item.filename for item in assets],
             reference_context=_reference_layout_context(campaign_dir),
         )
-        pages = _build_pages(plan, personas, templates, set(asset_paths))
+        pages = _build_pages(
+            plan,
+            personas,
+            templates,
+            set(asset_paths),
+            header_templates=header_templates,
+        )
 
         landing_id = str(uuid4())
         now = datetime.now(timezone.utc)
@@ -161,7 +175,7 @@ class LandingService:
         for page in pages:
             _write_text(
                 landing_dir / "pages" / page.persona_key / "index.html",
-                "\n".join(component.html for component in page.components),
+                _page_html(page),
             )
         update_project_stage(
             self._settings,
@@ -237,11 +251,7 @@ class LandingService:
         for page in saved.pages:
             _write_text(
                 landing_dir / "pages" / page.persona_key / "index.html",
-                "\n".join(
-                    component.html
-                    for component in page.components
-                    if not component.hidden
-                ),
+                _page_html(page),
             )
         self._save_record(saved)
         update_project_stage(
@@ -460,6 +470,8 @@ def _build_pages(
     personas: list[dict[str, Any]],
     templates: list[ComponentTemplate],
     asset_filenames: set[str],
+    *,
+    header_templates: list[ComponentTemplate] | None = None,
 ) -> list[LandingPage]:
     expected_keys = [item["persona_key"] for item in personas]
     if [page.persona_key for page in plan.pages] != expected_keys:
@@ -512,15 +524,37 @@ def _build_pages(
                 )
             )
         persona = persona_map[page_plan.persona_key]
+        header_components = [
+            LandingComponent(
+                instance_id=str(uuid4()),
+                template_id=template.template_id,
+                name=template.name,
+                category=template.category,
+                html=template.html,
+                layout_variant="source",
+                layout_options=["source"],
+            )
+            for template in header_templates or []
+        ]
         pages.append(
             LandingPage(
                 persona_key=page_plan.persona_key,
                 persona_name=str(persona["name"]),
                 ai_intent=page_plan.ai_intent,
+                header_components=header_components,
                 components=components,
             )
         )
     return pages
+
+
+def _page_html(page: LandingPage) -> str:
+    """Persist the non-editable shared header before each persona-specific body."""
+    return "\n".join(
+        component.html
+        for component in [*page.header_components, *page.components]
+        if not component.hidden
+    )
 
 
 def _load_json(path: Path) -> dict[str, Any]:

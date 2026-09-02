@@ -323,6 +323,25 @@ def test_split_components_handles_figma_div_exports_and_marks_cta() -> None:
     assert "/ data-editable" not in fragments[1].html
 
 
+def test_split_components_marks_small_campaign_news_as_editable_copy() -> None:
+    fragments = split_components(
+        """
+        <div data-layer="Landing page">
+          <div data-layer="새로운 소식" style="display:flex">
+            <div data-layer="label" style="font-size:10px">새로운 소식</div>
+            <div data-layer="campaign copy" style="font-size:10px">수납위크 10% 할인</div>
+          </div>
+        </div>
+        """,
+        "figma-news.html",
+    )
+
+    assert len(fragments) == 1
+    assert fragments[0].category == "content"
+    assert fragments[0].html.count('data-editable="copy"') == 2
+    assert 'data-editable-role="campaign"' in fragments[0].html
+
+
 def test_campaign_api_requires_exactly_one_pdf(tmp_path: Path) -> None:
     settings = Settings(storage_root=tmp_path)
     project_id = make_project(settings)

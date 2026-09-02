@@ -300,6 +300,7 @@ def _mark_editable_targets(source: str, *, category: str) -> str:
     """Expose marketing text, CTA labels, and images from raw Figma HTML to the editor."""
     if category == "navigation":
         return source
+    campaign_notice = bool(re.search(r"새로운\s*소식|news|notice|공지", source, re.IGNORECASE))
 
     def replace_text(match: re.Match[str]) -> str:
         attrs = match.group("attrs")
@@ -314,9 +315,9 @@ def _mark_editable_targets(source: str, *, category: str) -> str:
         cta = bool(
             re.search(r"가입|구매|장바구니|신청|시작|보기|혜택", layer + " " + text)
         )
-        if size < 16 and not cta:
+        if size < 16 and not cta and not campaign_notice:
             return match.group(0)
-        role = "cta" if cta else "copy"
+        role = "cta" if cta else "campaign" if campaign_notice else "copy"
         return (
             f'<{match.group("tag")}{attrs} data-editable="copy" '
             f'data-editable-role="{role}">{match.group("content")}</{match.group("tag")}>'

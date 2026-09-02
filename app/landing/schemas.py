@@ -64,6 +64,7 @@ class LandingPage(StrictModel):
     persona_key: str
     persona_name: str
     ai_intent: str
+    header_components: list[LandingComponent] = Field(default_factory=list)
     components: list[LandingComponent]
 
 

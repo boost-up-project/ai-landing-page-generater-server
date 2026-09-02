@@ -24,3 +24,6 @@ Rules:
    or create new components from it.
 10. Every editable target with role "cta" is a conversion action. Make its copy distinct
     for each persona by reflecting that persona's need, purchase barrier, and next action.
+11. Every editable target with role "campaign" is a campaign announcement. Ground it in
+    CAMPAIGN_CONTEXT, rather than generic brand messaging. The supplied templates are
+    body components only; the shared site header is fixed outside this page plan.

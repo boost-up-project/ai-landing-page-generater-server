@@ -69,6 +69,33 @@ class FakeLandingParser:
         return "image/png", b"generated-image"
 
 
+class HeaderAwareLandingParser(FakeLandingParser):
+    async def compose(self, **kwargs: object) -> LandingPlan:
+        components = kwargs["components"]
+        assert isinstance(components, list)
+        template_id = components[0]["template_id"]
+        return LandingPlan(
+            pages=[
+                LandingPagePlan(
+                    persona_key="persona-a",
+                    ai_intent="본문만 페르소나에 맞춰 구성했습니다.",
+                    components=[
+                        LandingComponentSelection(
+                            template_id=template_id,
+                            copy_values=["캠페인에 맞춘 본문 제목"],
+                            image_values=[
+                                EditableImage(
+                                    asset_filename="01_room.png",
+                                    alt="밝고 정돈된 거실",
+                                )
+                            ],
+                        )
+                    ],
+                )
+            ]
+        )
+
+
 def make_project(settings: Settings) -> str:
     project_id = create_project_id()
     root = project_dir(settings, project_id)
@@ -272,6 +299,47 @@ async def test_landing_plan_must_include_every_normalized_component(
 
     with pytest.raises(AIParserError, match="include every component template"):
         await service.create(project_id)
+
+
+@pytest.mark.asyncio
+async def test_navigation_is_fixed_header_and_excluded_from_body_library(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(storage_root=tmp_path)
+    project_id = make_project(settings)
+    component_dir = (
+        tmp_path
+        / "projects"
+        / project_id
+        / "campaign"
+        / "campaign-record"
+        / "component"
+    )
+    (component_dir / "00_header.html").write_text(
+        '<header data-component-name="공통 헤더" data-component-category="navigation">'
+        "공통 메뉴"
+        "</header>",
+        encoding="utf-8",
+    )
+    service = LandingService(settings, parser=HeaderAwareLandingParser())
+
+    result = await service.create(project_id)
+
+    assert [item.name for item in result.component_library] == ["히어로"]
+    page = result.pages[0]
+    assert [item.name for item in page.header_components] == ["공통 헤더"]
+    assert [item.name for item in page.components] == ["히어로"]
+    exported = (
+        tmp_path
+        / "projects"
+        / project_id
+        / "landing"
+        / result.landing_id
+        / "pages"
+        / "persona-a"
+        / "index.html"
+    ).read_text(encoding="utf-8")
+    assert exported.index("공통 메뉴") < exported.index("캠페인에 맞춘 본문 제목")
 
 
 def test_landing_api_creates_page_and_serves_campaign_asset(tmp_path: Path) -> None:
