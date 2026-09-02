@@ -19,6 +19,7 @@ __pycache__/
 # Runtime files
 storage/uploads/*
 storage/generated/*
+storage/projects/*
 
 !storage/uploads/.gitkeep
 !storage/generated/.gitkeep

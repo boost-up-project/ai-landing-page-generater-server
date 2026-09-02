@@ -136,6 +136,16 @@ Gemini가 반환하는 값은 Pydantic 스키마로 검증한 후 각 도메인�
 시각 자산은 합쳐서 최대 20개까지 업로드할 수 있다. 직접 업로드한 자산명과
 정규화된 색상값은 Gemini가 분석한 Visual Guideline에 합쳐진다.
 
+## 페르소나 생성
+
+`POST /api/personas`는 프로젝트의 `brand.md`와 `campaign.md`를 참고해 1~5개의
+자연어 입력을 각각 독립적인 구조화 페르소나로 생성한다. 결과는 Profile,
+Situation, Needs, Pain Point, Interest, Behavior와 Appendix의 Purchase Journey,
+Dislikes로 구성된다. 검토 확정 후 입력 순서대로 `persona-a.md`부터 최대
+`persona-e.md`까지 개별 파일을 생성한다.
+
+세부 요청·응답과 저장 명세는 `docs/output-specs/persona.md`에서 확인할 수 있다.
+
 ## 백엔드 실행 방법
 
 백엔드 저장소 루트에서 실행한다. 처음 실행할 때 의존성을 설치한다.
