@@ -23,6 +23,11 @@ from app.landing.html import (
     editable_structure,
     inspect_editable_targets,
 )
+from app.landing.ikea_image_pool import (
+    assign_ikea_images,
+    ikea_prompt_context,
+    load_ikea_images,
+)
 from app.landing.schemas import (
     ComponentTemplate,
     CopyCandidateRequest,
@@ -57,6 +62,7 @@ class LandingParser(Protocol):
         personas: list[dict[str, Any]],
         components: list[dict[str, Any]],
         asset_filenames: list[str],
+        ikea_context: dict[str, Any] | None = None,
         reference_context: dict[str, Any] | None = None,
     ) -> LandingPlan: ...
 
@@ -108,15 +114,20 @@ class LandingService:
         all_templates = _load_templates(campaign_dir / "component")
         if not all_templates:
             raise LandingStateError("At least one campaign HTML component is required")
+        header_templates = [item for item in all_templates if _is_header_template(item)]
         header_templates = [
-            item for item in all_templates if item.category == "navigation"
+            *header_templates,
+            *_load_uploaded_header_templates(
+                self._settings,
+                project_id,
+                existing_filenames={item.filename for item in header_templates},
+            ),
         ]
-        templates = [
-            item for item in all_templates if item.category != "navigation"
-        ]
+        templates = [item for item in all_templates if not _is_header_template(item)]
         if not templates:
             raise LandingStateError("At least one campaign body component is required")
         assets, asset_paths = _load_assets(campaign_dir / "assets")
+        ikea_images = load_ikea_images(self._settings)
         personas = [
             {
                 "persona_key": f"persona-{chr(97 + index)}",
@@ -147,6 +158,7 @@ class LandingService:
             personas=personas,
             components=component_manifest,
             asset_filenames=[item.filename for item in assets],
+            ikea_context=ikea_prompt_context(ikea_images),
             reference_context=_reference_layout_context(campaign_dir),
         )
         pages = _build_pages(
@@ -155,6 +167,7 @@ class LandingService:
             templates,
             set(asset_paths),
             header_templates=header_templates,
+            ikea_images=ikea_images,
         )
 
         landing_id = str(uuid4())
@@ -470,6 +483,48 @@ def _load_templates(component_dir: Path) -> list[ComponentTemplate]:
     return templates
 
 
+def _is_header_template(template: ComponentTemplate) -> bool:
+    return (
+        template.filename.lower() == "header.html"
+        or _is_header_html(template.html)
+    )
+
+
+def _is_header_html(html: str) -> bool:
+    return html.lstrip().lower().startswith("<header")
+
+
+def _load_uploaded_header_templates(
+    settings: Settings,
+    project_id: str,
+    *,
+    existing_filenames: set[str],
+) -> list[ComponentTemplate]:
+    candidates = [
+        settings.storage_root / "uploads" / project_id / "header.html",
+        settings.storage_root / "uploads" / "header.html",
+    ]
+    templates: list[ComponentTemplate] = []
+    for path in candidates:
+        if not path.is_file() or path.name in existing_filenames:
+            continue
+        source = path.read_text(encoding="utf-8")
+        name, _category = component_metadata(source, path.name)
+        templates.append(
+            ComponentTemplate(
+                template_id=f"uploaded-header-{len(templates) + 1}",
+                name=name,
+                category="navigation",
+                filename=path.name,
+                html=source,
+                editable_targets=inspect_editable_targets(source),
+                layout_options=component_layout_options(source),
+            )
+        )
+        existing_filenames.add(path.name)
+    return templates
+
+
 def _load_assets(asset_dir: Path) -> tuple[list[LandingAsset], dict[str, Path]]:
     if not asset_dir.is_dir():
         return [], {}
@@ -491,12 +546,15 @@ def _build_pages(
     asset_filenames: set[str],
     *,
     header_templates: list[ComponentTemplate] | None = None,
+    ikea_images: list[Any] | None = None,
 ) -> list[LandingPage]:
     expected_keys = [item["persona_key"] for item in personas]
     if [page.persona_key for page in plan.pages] != expected_keys:
         raise AIParserError("Landing plan must contain every persona in order")
     template_map = {item.template_id: item for item in templates}
     persona_map = {item["persona_key"]: item for item in personas}
+    image_pool = ikea_images or []
+    used_ikea_image_ids: set[str] = set()
     pages: list[LandingPage] = []
     for page_plan in plan.pages:
         selected_ids = [selection.template_id for selection in page_plan.components]
@@ -535,6 +593,15 @@ def _build_pages(
                 for image in image_values
             ):
                 raise AIParserError("Landing plan referenced an unknown image asset")
+            image_values = assign_ikea_images(
+                image_values,
+                copy_values=copy_values,
+                persona=persona_map[page_plan.persona_key],
+                component_name=template.name,
+                component_category=template.category,
+                image_pool=image_pool,
+                used_image_ids=used_ikea_image_ids,
+            )
             components.append(
                 LandingComponent(
                     instance_id=str(uuid4()),
@@ -589,7 +656,7 @@ def _upgrade_legacy_header(record: LandingResponse) -> LandingResponse:
     header_templates = [
         template
         for template in record.component_library
-        if template.category == "navigation"
+        if _is_header_template(template)
     ]
     if not header_templates:
         return record
@@ -605,7 +672,7 @@ def _upgrade_legacy_header(record: LandingResponse) -> LandingResponse:
             component
             for component in page.components
             if component.template_id not in header_template_ids
-            and component.category != "navigation"
+            and not _is_header_html(component.html)
         ]
         header_components = page.header_components or [
             LandingComponent(

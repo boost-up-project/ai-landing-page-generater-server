@@ -314,7 +314,7 @@ def test_split_components_handles_figma_div_exports_and_marks_cta() -> None:
     )
 
     assert len(fragments) == 2
-    assert fragments[0].category == "navigation"
+    assert fragments[0].category == "content"
     assert "data-editable" not in fragments[0].html
     assert fragments[1].category == "hero"
     assert 'data-editable="copy"' in fragments[1].html
@@ -340,6 +340,25 @@ def test_split_components_marks_small_campaign_news_as_editable_copy() -> None:
     assert fragments[0].category == "content"
     assert fragments[0].html.count('data-editable="copy"') == 2
     assert 'data-editable-role="campaign"' in fragments[0].html
+
+
+def test_split_components_marks_class_styled_headings_and_paragraphs_as_copy() -> None:
+    fragments = split_components(
+        """
+        <section class="deals">
+          <h3 class="deals__title">더 낮은 새로운 가격</h3>
+          <p class="deals__description">
+            많은 사랑을 받은 제품들을 더욱 낮은 가격으로 선보입니다.
+            품질은 그대로, 가격은 아래로!
+          </p>
+        </section>
+        """,
+        "teaser.html",
+    )
+
+    assert fragments[0].html.count('data-editable="copy"') == 2
+    assert '<h3 class="deals__title" data-editable="copy"' in fragments[0].html
+    assert '<p class="deals__description" data-editable="copy"' in fragments[0].html
 
 
 def test_campaign_api_requires_exactly_one_pdf(tmp_path: Path) -> None:

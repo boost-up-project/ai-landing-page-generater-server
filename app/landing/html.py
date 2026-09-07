@@ -36,6 +36,9 @@ def inspect_editable_targets(source: str) -> list[EditableTarget]:
                 _strip_tags(match.group("content"))
             ).strip(),
             role=_attribute(match.group(1), "data-editable-role") or "copy",
+            tag=match.group("tag").casefold(),
+            recommended_max_characters=_copy_length_hint(match.group("tag")),
+            recommended_lines=_copy_line_hint(match.group("tag")),
         )
         for match in COPY_PATTERN.finditer(source)
     ]
@@ -85,7 +88,7 @@ def apply_editable_values(
 
     def replace_copy(match: re.Match[str]) -> str:
         nonlocal copy_index
-        value = html_module.escape(copy_values[copy_index], quote=False)
+        value = _render_copy_value(copy_values[copy_index])
         copy_index += 1
         return f"{match.group(1)}{value}{match.group(4)}"
 
@@ -98,7 +101,12 @@ def apply_editable_values(
         image_index += 1
         tag = match.group(0)
         if value.asset_filename:
-            tag = _set_attribute(tag, "src", f"asset://{value.asset_filename}")
+            source = (
+                value.asset_filename
+                if value.asset_filename.startswith(("http://", "https://"))
+                else f"asset://{value.asset_filename}"
+            )
+            tag = _set_attribute(tag, "src", source)
         return _set_attribute(tag, "alt", value.alt)
 
     return IMAGE_PATTERN.sub(replace_image, result)
@@ -168,3 +176,30 @@ def _attribute(source: str, name: str) -> str:
 
 def _strip_tags(value: str) -> str:
     return re.sub(r"<[^>]+>", " ", value)
+
+
+def _render_copy_value(value: str) -> str:
+    """Escape generated copy while preserving intentional semantic line breaks."""
+    normalized = re.sub(r"<br\s*/?>", "\n", value, flags=re.IGNORECASE)
+    return "<br>".join(
+        html_module.escape(line.strip(), quote=False)
+        for line in normalized.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    )
+
+
+def _copy_length_hint(tag: str) -> int:
+    normalized = tag.casefold()
+    if normalized in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+        return 15
+    if normalized == "p":
+        return 20
+    return 15
+
+
+def _copy_line_hint(tag: str) -> int:
+    normalized = tag.casefold()
+    if normalized in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+        return 3
+    if normalized == "p":
+        return 2
+    return 1

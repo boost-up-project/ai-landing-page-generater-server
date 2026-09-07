@@ -214,9 +214,6 @@ def _meaningful(fragment: str) -> bool:
 
 def _component_identity(fragment: str, base_name: str, index: int) -> tuple[str, str]:
     lower = fragment.casefold()
-    layer = _data_layer(fragment)
-    if re.search(r"(?:nav|navbar|utility|header)", lower):
-        return layer or "Navigation", "navigation"
     if re.search(r"\b(?:hero|visual|kv|masthead)\b", lower) or "<h1" in lower:
         return "Hero", "hero"
     if re.search(
@@ -312,10 +309,17 @@ def _mark_editable_targets(source: str, *, category: str) -> str:
             return match.group(0)
         layer = _data_layer(match.group(0)).casefold()
         size = _font_size(attrs)
+        tag = match.group("tag").casefold()
+        semantic_marketing_copy = tag == "p" or bool(re.fullmatch(r"h[1-6]", tag))
         cta = bool(
             re.search(r"가입|구매|장바구니|신청|시작|보기|혜택", layer + " " + text)
         )
-        if size < 16 and not cta and not campaign_notice:
+        if (
+            size < 16
+            and not semantic_marketing_copy
+            and not cta
+            and not campaign_notice
+        ):
             return match.group(0)
         role = "cta" if cta else "campaign" if campaign_notice else "copy"
         return (

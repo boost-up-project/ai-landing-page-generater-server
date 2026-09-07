@@ -96,6 +96,33 @@ class HeaderAwareLandingParser(FakeLandingParser):
         )
 
 
+class AllComponentsLandingParser(FakeLandingParser):
+    async def compose(self, **kwargs: object) -> LandingPlan:
+        components = kwargs["components"]
+        assert isinstance(components, list)
+        return LandingPlan(
+            pages=[
+                LandingPagePlan(
+                    persona_key="persona-a",
+                    ai_intent="모든 본문 컴포넌트를 순서대로 유지했습니다.",
+                    components=[
+                        LandingComponentSelection(
+                            template_id=item["template_id"],
+                            copy_values=["캠페인에 맞춘 본문 제목"],
+                            image_values=[
+                                EditableImage(
+                                    asset_filename="01_room.png",
+                                    alt="밝고 정돈된 거실",
+                                )
+                            ],
+                        )
+                        for item in components
+                    ],
+                )
+            ]
+        )
+
+
 class PartialLandingParser(FakeLandingParser):
     async def compose(self, **_: object) -> LandingPlan:
         return LandingPlan(
@@ -199,7 +226,6 @@ async def test_landing_service_creates_persona_page_without_structure_changes(
     assert 'src="asset://01_room.png"' in html
     assert 'alt="밝고 정돈된 거실"' in html
     assert service.get(result.landing_id) == result
-
     candidates = await service.copy_candidates(
         result.landing_id,
         CopyCandidateRequest(
@@ -295,6 +321,22 @@ async def test_landing_service_creates_persona_page_without_structure_changes(
         )
 
 
+def test_apply_editable_values_preserves_safe_semantic_line_breaks() -> None:
+    from app.landing.html import apply_editable_values
+
+    source = '<h2 data-editable="copy">기존 제목</h2>'
+    html = apply_editable_values(
+        source,
+        ["복잡한 공간을\n말끔히 정리해 줄\nKALLAX 칼락스<script>"],
+        [],
+    )
+
+    assert html == (
+        '<h2 data-editable="copy">복잡한 공간을<br>말끔히 정리해 줄<br>'
+        'KALLAX 칼락스&lt;script&gt;</h2>'
+    )
+
+
 @pytest.mark.asyncio
 async def test_landing_plan_must_include_every_normalized_component(
     tmp_path: Path,
@@ -334,6 +376,47 @@ async def test_landing_keeps_source_values_when_ai_omits_editable_targets(
     assert "기존 제목" in html
     assert 'src="old.png"' in html
     assert 'alt="기존 이미지"' in html
+
+
+@pytest.mark.asyncio
+async def test_landing_assigns_ikea_metadata_image_urls_to_body_components(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(storage_root=tmp_path)
+    project_id = make_project(settings)
+    upload_dir = tmp_path / "uploads"
+    upload_dir.mkdir(parents=True)
+    (upload_dir / "ikea_metadata_300_v2.json").write_text(
+        json.dumps(
+            [
+                {
+                    "id": "IKEA-HERO",
+                    "image": {
+                        "cdn_url": "https://www.ikea.com/hero-room.jpg",
+                        "alt_text": "Hero room",
+                        "context_text": "living room gallery roomset",
+                        "image_type": "roomset",
+                        "recommended_component": "hero",
+                    },
+                    "classification": {
+                        "room": "living_room",
+                        "category": "living_room_furniture",
+                        "sub_category": None,
+                        "products": [],
+                    },
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    service = LandingService(settings, parser=FakeLandingParser())
+
+    result = await service.create(project_id)
+
+    html = result.pages[0].components[0].html
+    assert 'src="https://www.ikea.com/hero-room.jpg"' in html
+    assert 'src="asset://https://www.ikea.com/hero-room.jpg"' not in html
+    assert 'alt="IKEA living room gallery roomset"' in html
 
 
 @pytest.mark.asyncio
@@ -407,6 +490,124 @@ async def test_navigation_is_fixed_header_and_excluded_from_body_library(
     assert [item.name for item in upgraded.component_library] == ["히어로"]
     assert [item.name for item in upgraded.pages[0].header_components] == ["공통 헤더"]
     assert [item.name for item in upgraded.pages[0].components] == ["히어로"]
+
+
+@pytest.mark.asyncio
+async def test_uploaded_project_header_is_fixed_when_campaign_has_no_header(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(storage_root=tmp_path)
+    project_id = make_project(settings)
+    upload_dir = tmp_path / "uploads" / project_id
+    upload_dir.mkdir(parents=True)
+    (upload_dir / "header.html").write_text(
+        '<header data-component-name="업로드 헤더">업로드 공통 메뉴</header>',
+        encoding="utf-8",
+    )
+    service = LandingService(settings, parser=HeaderAwareLandingParser())
+
+    result = await service.create(project_id)
+
+    assert [item.name for item in result.component_library] == ["히어로"]
+    page = result.pages[0]
+    assert [item.name for item in page.header_components] == ["업로드 헤더"]
+    assert [item.category for item in page.header_components] == ["navigation"]
+    exported = (
+        tmp_path
+        / "projects"
+        / project_id
+        / "landing"
+        / result.landing_id
+        / "pages"
+        / "persona-a"
+        / "index.html"
+    ).read_text(encoding="utf-8")
+    assert exported.index("업로드 공통 메뉴") < exported.index("캠페인에 맞춘 본문 제목")
+
+
+@pytest.mark.asyncio
+async def test_navigation_body_component_does_not_move_above_uploaded_header(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(storage_root=tmp_path)
+    project_id = make_project(settings)
+    upload_dir = tmp_path / "uploads" / project_id
+    upload_dir.mkdir(parents=True)
+    (upload_dir / "header.html").write_text(
+        '<header data-component-name="업로드 헤더">업로드 공통 메뉴</header>',
+        encoding="utf-8",
+    )
+    component_dir = (
+        tmp_path
+        / "projects"
+        / project_id
+        / "campaign"
+        / "campaign-record"
+        / "component"
+    )
+    (component_dir / "00_navigation.html").write_text(
+        '<div data-component-name="본문 내비게이션" data-component-category="navigation">'
+        "캠페인 보조 내비게이션"
+        "</div>",
+        encoding="utf-8",
+    )
+    service = LandingService(settings, parser=AllComponentsLandingParser())
+
+    result = await service.create(project_id)
+
+    page = result.pages[0]
+    assert [item.name for item in page.header_components] == ["업로드 헤더"]
+    assert "본문 내비게이션" in [item.name for item in page.components]
+    exported = (
+        tmp_path
+        / "projects"
+        / project_id
+        / "landing"
+        / result.landing_id
+        / "pages"
+        / "persona-a"
+        / "index.html"
+    ).read_text(encoding="utf-8")
+    assert exported.index("업로드 공통 메뉴") < exported.index("캠페인 보조 내비게이션")
+
+
+@pytest.mark.asyncio
+async def test_header_root_component_is_fixed_even_without_navigation_category(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(storage_root=tmp_path)
+    project_id = make_project(settings)
+    component_dir = (
+        tmp_path
+        / "projects"
+        / project_id
+        / "campaign"
+        / "campaign-record"
+        / "component"
+    )
+    (component_dir / "header.html").write_text(
+        '<header data-component-name="파일명 헤더">파일명 공통 메뉴</header>',
+        encoding="utf-8",
+    )
+    service = LandingService(settings, parser=HeaderAwareLandingParser())
+
+    result = await service.create(project_id)
+
+    page = result.pages[0]
+    assert [item.name for item in page.header_components] == ["파일명 헤더"]
+    assert [item.name for item in page.components] == ["히어로"]
+    exported = (
+        tmp_path
+        / "projects"
+        / project_id
+        / "landing"
+        / result.landing_id
+        / "pages"
+        / "persona-a"
+        / "index.html"
+    ).read_text(encoding="utf-8")
+    assert exported.startswith('<header data-component-name="파일명 헤더"')
+    assert exported.index("파일명 공통 메뉴") < exported.index("캠페인에 맞춘 본문 제목")
 
 
 def test_landing_api_creates_page_and_serves_campaign_asset(tmp_path: Path) -> None:

@@ -37,6 +37,9 @@ class EditableTarget(StrictModel):
     kind: str
     current_value: str
     role: str = "copy"
+    tag: str = ""
+    recommended_max_characters: int | None = None
+    recommended_lines: int | None = None
 
 
 class ComponentTemplate(StrictModel):

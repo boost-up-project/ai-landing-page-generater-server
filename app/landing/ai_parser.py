@@ -48,6 +48,7 @@ class GeminiLandingParser:
         personas: list[dict[str, Any]],
         components: list[dict[str, Any]],
         asset_filenames: list[str],
+        ikea_context: dict[str, Any] | None = None,
         reference_context: dict[str, Any] | None = None,
     ) -> LandingPlan:
         if not self._settings.gemini_api_key:
@@ -58,6 +59,8 @@ class GeminiLandingParser:
             f"[CAMPAIGN_CONTEXT]\n{campaign_context}\n\n"
             f"[PERSONAS]\n{json.dumps(personas, ensure_ascii=False)}\n\n"
             f"[COMPONENTS]\n{json.dumps(components, ensure_ascii=False)}\n\n"
+            f"[IKEA_IMAGE_AND_PRODUCT_GROUP_CONTEXT]\n"
+            f"{json.dumps(ikea_context or {}, ensure_ascii=False)}\n\n"
             f"[REFERENCE_LAYOUT]\n{json.dumps(reference_context or {}, ensure_ascii=False)}\n\n"
             f"[ASSET_FILENAMES]\n{json.dumps(asset_filenames, ensure_ascii=False)}"
         )
