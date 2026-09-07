@@ -54,10 +54,10 @@ async def analyze_campaign(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"{source_name}: only PDF files are supported",
         )
-    if not component_files:
+    if not component_files and not bundle_files:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="At least one HTML component is required",
+            detail="At least one HTML component or ZIP bundle is required",
         )
 
     try:

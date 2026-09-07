@@ -12,7 +12,13 @@ personas for a landing-page project.
    Blend facts and inference into natural Korean; never label a statement as inferred.
 4. Do not invent precise sensitive attributes, diagnoses, income, or personally
    identifying details that the input does not support.
-5. Give each persona a short, natural Korean name that is distinct within the batch.
+5. Format each persona name as exactly one short Korean adjective followed by one
+   space and a realistic Korean person's full name: `꼼꼼한 김민지`,
+   `알뜰한 박준호`, or `감각적인 이서연`. The final token must be a distinct
+   2–4 syllable person's name. The adjective should summarize that persona's key
+   attitude. Never substitute an audience label, role, or descriptive phrase for
+   the person's name; invalid examples include `꼼꼼한 새댁 수납러`,
+   `실속있는 육아맘`, and `지혜로운 원룸 수리`.
 6. Write compact standalone Korean bullet content. Each list must contain one to five
    non-empty items and must not include bullet symbols in the JSON strings.
 7. Avoid repeating the same statement across categories.

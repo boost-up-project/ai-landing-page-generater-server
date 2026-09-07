@@ -97,6 +97,8 @@ class CampaignService:
         components = [*components, *bundled_components]
         styles = [*styles, *bundled_styles]
         assets = [*assets, *bundled_assets]
+        if bundles and not components:
+            raise ValueError("ZIP bundle must contain at least one HTML component")
         _validate_component_files(
             components,
             max_files=self._settings.max_campaign_component_files,
@@ -481,24 +483,31 @@ def _expand_bundles(
     for bundle in bundles:
         try:
             with ZipFile(BytesIO(bundle.data)) as archive:
-                entries = [item for item in archive.infolist() if not item.is_dir()]
-                if len(entries) > max_entries:
-                    raise ValueError(
-                        f"{bundle.filename}: ZIP contains more than {max_entries} files"
-                    )
-                for item in entries:
+                entries = []
+                for item in archive.infolist():
                     member = Path(item.filename)
                     if member.is_absolute() or ".." in member.parts:
                         raise ValueError(
                             f"{bundle.filename}: ZIP contains an unsafe path"
                         )
-                    if (
-                        item.is_dir()
-                        or (item.external_attr >> 16) & 0o170000 == 0o120000
-                    ):
+                    if (item.external_attr >> 16) & 0o170000 == 0o120000:
                         raise ValueError(
                             f"{bundle.filename}: ZIP contains an unsupported link"
                         )
+                    if item.is_dir():
+                        continue
+                    if (
+                        "__MACOSX" in member.parts
+                        or member.name.startswith("._")
+                        or member.name == ".DS_Store"
+                    ):
+                        continue
+                    entries.append((item, member))
+                if len(entries) > max_entries:
+                    raise ValueError(
+                        f"{bundle.filename}: ZIP contains more than {max_entries} files"
+                    )
+                for item, member in entries:
                     suffix = member.suffix.lower()
                     data = archive.read(item)
                     filename = member.name
