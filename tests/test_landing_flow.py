@@ -245,7 +245,7 @@ def make_project(settings: Settings) -> str:
     )
     now = datetime.now(timezone.utc)
     persona = PersonaKnowledge(
-        name="새 출발 민지",
+        name="민지",
         profile=["첫 독립을 준비한다"],
         situation=["작은 집을 꾸미고 있다"],
         needs=["예산 안에서 완성하고 싶다"],
@@ -293,7 +293,7 @@ async def test_landing_service_creates_persona_page_without_structure_changes(
 
     result = await service.create(project_id)
 
-    assert result.pages[0].persona_name == "새 출발 민지"
+    assert result.pages[0].persona_name == "민지"
     assert result.pages[0].ux_strategy.primary_problem == "선택지가 많아 생기는 결정 부담"
     assert result.component_library[0].name == "히어로"
     html = result.pages[0].components[0].html
