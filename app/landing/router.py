@@ -1,0 +1,133 @@
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi.responses import FileResponse
+
+from app.brand.ai_parser import AIParserError
+from app.core.config import Settings, get_settings
+from app.landing.schemas import (
+    CopyCandidateRequest,
+    CopyCandidateResponse,
+    ImageGenerateRequest,
+    LandingAsset,
+    LandingCreateRequest,
+    LandingResponse,
+    LandingSaveRequest,
+)
+from app.landing.service import (
+    LandingNotFoundError,
+    LandingService,
+    LandingStateError,
+)
+from app.project.service import ProjectNotFoundError
+
+router = APIRouter(prefix="/landings", tags=["landings"])
+
+
+def get_landing_service(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> LandingService:
+    return LandingService(settings)
+
+
+@router.post("", response_model=LandingResponse, status_code=status.HTTP_201_CREATED)
+async def create_landing(
+    request: LandingCreateRequest,
+    service: Annotated[LandingService, Depends(get_landing_service)],
+) -> LandingResponse:
+    try:
+        return await service.create(request.project_id)
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except LandingStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except AIParserError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.get("/{landing_id}", response_model=LandingResponse)
+async def get_landing(
+    landing_id: str,
+    service: Annotated[LandingService, Depends(get_landing_service)],
+) -> LandingResponse:
+    try:
+        return service.get(landing_id)
+    except LandingNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.put("/{landing_id}", response_model=LandingResponse)
+async def save_landing(
+    landing_id: str,
+    request: LandingSaveRequest,
+    service: Annotated[LandingService, Depends(get_landing_service)],
+) -> LandingResponse:
+    try:
+        return service.save(landing_id, request)
+    except LandingNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except LandingStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/{landing_id}/copy-candidates", response_model=CopyCandidateResponse)
+async def generate_copy_candidates(
+    landing_id: str,
+    request: CopyCandidateRequest,
+    service: Annotated[LandingService, Depends(get_landing_service)],
+) -> CopyCandidateResponse:
+    try:
+        return await service.copy_candidates(landing_id, request)
+    except LandingNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except LandingStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except AIParserError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/{landing_id}/assets/upload", response_model=LandingAsset)
+async def upload_landing_asset(
+    landing_id: str,
+    file: Annotated[UploadFile, File(...)],
+    service: Annotated[LandingService, Depends(get_landing_service)],
+) -> LandingAsset:
+    try:
+        return service.upload_asset(
+            landing_id,
+            filename=file.filename or "upload.png",
+            content_type=file.content_type or "application/octet-stream",
+            data=await file.read(),
+        )
+    except LandingNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except LandingStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/{landing_id}/assets/generate", response_model=LandingAsset)
+async def generate_landing_asset(
+    landing_id: str,
+    request: ImageGenerateRequest,
+    service: Annotated[LandingService, Depends(get_landing_service)],
+) -> LandingAsset:
+    try:
+        return await service.generate_image_asset(landing_id, request)
+    except LandingNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except LandingStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except AIParserError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.get("/{landing_id}/assets/{filename}")
+async def get_landing_asset(
+    landing_id: str,
+    filename: str,
+    service: Annotated[LandingService, Depends(get_landing_service)],
+) -> FileResponse:
+    try:
+        return FileResponse(service.asset_path(landing_id, filename))
+    except LandingNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc

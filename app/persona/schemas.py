@@ -30,9 +30,15 @@ class PersonaAppendix(StrictModel):
 
 class PersonaKnowledge(StrictModel):
     name: str = Field(
-        min_length=1,
-        max_length=40,
-        description="A concise AI-generated Korean persona name",
+        min_length=2,
+        max_length=14,
+        pattern=r"^(?:[가-힣]{2,8}(?:한|인) )?[가-힣]{2,4}$",
+        description=(
+            "A short Korean adjective followed by a realistic Korean person's full "
+            "name, such as 꼼꼼한 김민지 or 감각적인 박서연; the final token must "
+            "always be a person's name, never an audience label, role, or descriptor"
+        ),
+        examples=["꼼꼼한 김민지"],
     )
     profile: list[str] = Field(
         min_length=1,
@@ -78,7 +84,7 @@ class PersonaKnowledge(StrictModel):
     def validate_non_empty_items(cls, values: list[str]) -> list[str]:
         return _clean_items(values)
 
-    @field_validator("name")
+    @field_validator("name", mode="before")
     @classmethod
     def validate_name(cls, value: str) -> str:
         cleaned = value.strip()

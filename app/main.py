@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.brand.router import router as brand_router
 from app.campaign.router import router as campaign_router
 from app.core.config import get_settings
+from app.landing.router import router as landing_router
 from app.persona.router import router as persona_router
 
 settings = get_settings()
@@ -24,6 +25,7 @@ app.add_middleware(
 app.include_router(brand_router, prefix="/api")
 app.include_router(campaign_router, prefix="/api")
 app.include_router(persona_router, prefix="/api")
+app.include_router(landing_router, prefix="/api")
 
 
 @app.get("/health", tags=["health"])

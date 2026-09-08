@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+from io import BytesIO
 from pathlib import Path
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import pymupdf
 import pytest
 from fastapi.testclient import TestClient
 
+from app.campaign.componentization import split_components
 from app.campaign.router import get_campaign_service
 from app.campaign.schemas import (
     CampaignKnowledge,
@@ -48,6 +51,16 @@ def make_pdf_bytes(text: str = "Campaign strategy source") -> bytes:
     content = document.tobytes()
     document.close()
     return content
+
+
+def make_component_zip() -> bytes:
+    output = BytesIO()
+    with ZipFile(output, "w", ZIP_DEFLATED) as archive:
+        archive.writestr("components/", b"")
+        archive.writestr("components/hero.html", "<section>Hero</section>")
+        archive.writestr("__MACOSX/components/._hero.html", b"\x00\xffAppleDouble")
+        archive.writestr("components/.DS_Store", b"\x00\xffmetadata")
+    return output.getvalue()
 
 
 class FakeCampaignParser:
@@ -93,9 +106,12 @@ async def test_campaign_service_stores_files_and_creates_draft(tmp_path: Path) -
     assert "[SOURCE_FILE: strategy.pdf]" in parser.extracted_text
     assert parser.calls == 1
     root = tmp_path / "projects" / project_id / "campaign" / result.campaign_id
-    assert (root / "component" / "01_hero.html").read_text() == (
-        "<section>Hero</section>"
-    )
+    assert result.component_files == ["01_Hero.html"]
+    normalized = (root / "component" / result.component_files[0]).read_text()
+    assert 'data-component-name="Hero"' in normalized
+    assert 'data-layout-options="source media-left media-right media-top"' in normalized
+    assert "data-component-layout-runtime" in normalized
+    assert (root / "uploads" / "components" / "01_hero.html").is_file()
     assert (root / "assets" / "01_hero.png").is_file()
     assert (root / "uploads" / "strategy.pdf").is_file()
     project_record = json.loads(
@@ -265,9 +281,96 @@ def test_campaign_api_accepts_pdf_components_and_assets(tmp_path: Path) -> None:
     body = response.json()
     assert body["status"] == "draft"
     assert body["project_id"] == project_id
-    assert body["component_files"] == ["card.html"]
-    assert body["asset_files"] == ["card.jpg"]
+    assert body["component_files"] == ["01_Card 1.html"]
+    assert body["asset_files"] == ["01_card.jpg"]
     assert len(body["data"]) == 8
+
+
+def test_split_components_keeps_every_outer_section_and_removes_unsafe_markup() -> None:
+    fragments = split_components(
+        """
+        <html><head><script>alert('never run')</script><style>.hero{color:red}</style></head>
+        <body><header class="hero" onclick="bad()"><h1>Title</h1></header>
+        <section><img src="room.png" onerror="bad()"><a href="javascript:bad()">More</a></section>
+        <footer>Footer</footer></body></html>
+        """,
+        "source.html",
+        asset_names={"room.png": "01_room.png"},
+    )
+
+    assert len(fragments) == 3
+    joined = "\n".join(fragment.html for fragment in fragments)
+    assert "<script" not in joined
+    assert "onclick" not in joined
+    assert "onerror" not in joined
+    assert "javascript:" not in joined
+    assert 'src="asset://01_room.png"' in joined
+    assert all("data-layout-options" in fragment.html for fragment in fragments)
+
+
+def test_split_components_handles_figma_div_exports_and_marks_cta() -> None:
+    fragments = split_components(
+        """
+        <div data-layer="Landing page" style="display:inline-flex; flex-direction:column">
+          <div data-layer="top_navbar_01" style="align-self:stretch; display:flex">
+            <div data-layer="KR" style="font-size:12px">KR</div>
+          </div>
+          <div data-layer="Sale hero" style="align-self:stretch; display:flex">
+            <div data-layer="headline" style="font-size:32px">필요한 수납을 만나는 시간</div>
+            <div data-layer="join CTA" style="font-size:10px">멤버십 가입하고 혜택 받기</div>
+            <img data-layer="hero image" src="room.png">
+          </div>
+        </div>
+        """,
+        "figma-export.html",
+    )
+
+    assert len(fragments) == 2
+    assert fragments[0].category == "content"
+    assert "data-editable" not in fragments[0].html
+    assert fragments[1].category == "hero"
+    assert 'data-editable="copy"' in fragments[1].html
+    assert 'data-editable-role="cta"' in fragments[1].html
+    assert 'data-editable="image"' in fragments[1].html
+    assert "/ data-editable" not in fragments[1].html
+
+
+def test_split_components_marks_small_campaign_news_as_editable_copy() -> None:
+    fragments = split_components(
+        """
+        <div data-layer="Landing page">
+          <div data-layer="새로운 소식" style="display:flex">
+            <div data-layer="label" style="font-size:10px">새로운 소식</div>
+            <div data-layer="campaign copy" style="font-size:10px">수납위크 10% 할인</div>
+          </div>
+        </div>
+        """,
+        "figma-news.html",
+    )
+
+    assert len(fragments) == 1
+    assert fragments[0].category == "content"
+    assert fragments[0].html.count('data-editable="copy"') == 2
+    assert 'data-editable-role="campaign"' in fragments[0].html
+
+
+def test_split_components_marks_class_styled_headings_and_paragraphs_as_copy() -> None:
+    fragments = split_components(
+        """
+        <section class="deals">
+          <h3 class="deals__title">더 낮은 새로운 가격</h3>
+          <p class="deals__description">
+            많은 사랑을 받은 제품들을 더욱 낮은 가격으로 선보입니다.
+            품질은 그대로, 가격은 아래로!
+          </p>
+        </section>
+        """,
+        "teaser.html",
+    )
+
+    assert fragments[0].html.count('data-editable="copy"') == 2
+    assert '<h3 class="deals__title" data-editable="copy"' in fragments[0].html
+    assert '<p class="deals__description" data-editable="copy"' in fragments[0].html
 
 
 def test_campaign_api_requires_exactly_one_pdf(tmp_path: Path) -> None:
@@ -294,6 +397,33 @@ def test_campaign_api_requires_exactly_one_pdf(tmp_path: Path) -> None:
 
     assert response.status_code == 422
     assert response.json()["detail"] == "Exactly one campaign strategy PDF is required"
+
+
+def test_campaign_api_accepts_zip_instead_of_individual_html(tmp_path: Path) -> None:
+    settings = Settings(storage_root=tmp_path)
+    project_id = make_project(settings)
+    service = CampaignService(
+        settings,
+        parser=FakeCampaignParser(make_campaign_knowledge()),
+    )
+    app.dependency_overrides[get_campaign_service] = lambda: service
+
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/campaigns",
+                files=[
+                    ("strategy_file", ("strategy.pdf", make_pdf_bytes(), "application/pdf")),
+                    ("bundle_files", ("components.zip", make_component_zip(), "application/zip")),
+                ],
+                data={"project_id": project_id},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 201
+    assert response.json()["bundle_files"] == ["components.zip"]
+    assert response.json()["component_files"] == ["01_Hero.html"]
 
 
 @pytest.mark.asyncio

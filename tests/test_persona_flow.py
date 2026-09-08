@@ -202,3 +202,18 @@ def test_persona_api_rejects_more_than_five_inputs(tmp_path: Path) -> None:
 def test_persona_batch_requires_unique_ai_names() -> None:
     with pytest.raises(ValidationError, match="must be unique"):
         PersonaBatch(personas=[make_persona(), make_persona()])
+
+
+def test_persona_name_accepts_adjective_before_person_name() -> None:
+    persona = make_persona("꼼꼼한 김민지")
+
+    assert persona.name == "꼼꼼한 김민지"
+
+
+@pytest.mark.parametrize(
+    "invalid_name",
+    ["꼼꼼한 새댁 수납러", "실속있는 육아맘", "Persona A", "김민지 고객"],
+)
+def test_persona_name_must_be_a_korean_person_name(invalid_name: str) -> None:
+    with pytest.raises(ValidationError):
+        make_persona(invalid_name)
