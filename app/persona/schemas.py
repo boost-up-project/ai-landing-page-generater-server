@@ -31,14 +31,15 @@ class PersonaAppendix(StrictModel):
 class PersonaKnowledge(StrictModel):
     name: str = Field(
         min_length=2,
-        max_length=14,
-        pattern=r"^(?:[가-힣]{2,8}(?:한|인) )?[가-힣]{2,4}$",
+        max_length=40,
+        pattern=r"^(?:[가-힣0-9][가-힣0-9\s·&-]*\s)?[가-힣]{2,4}$",
         description=(
-            "A short Korean adjective followed by a realistic Korean person's full "
-            "name, such as 꼼꼼한 김민지 or 감각적인 박서연; the final token must "
-            "always be a person's name, never an audience label, role, or descriptor"
+            "A concise Korean persona description optionally followed by a space and "
+            "a realistic Korean person's name, such as 혼자 사는 김민지, 5인 가족과 "
+            "함께사는 이서영, or 얼마전 결혼한 김준호; the final token must always "
+            "be a 2–4 syllable person's name"
         ),
-        examples=["꼼꼼한 김민지"],
+        examples=["혼자 사는 김민지", "5인 가족과 함께사는 이서영"],
     )
     profile: list[str] = Field(
         min_length=1,
@@ -90,6 +91,20 @@ class PersonaKnowledge(StrictModel):
         cleaned = value.strip()
         if not cleaned:
             raise ValueError("Persona name must not be blank")
+        final_token = cleaned.split()[-1]
+        if final_token in {
+            "고객",
+            "직장인",
+            "새댁",
+            "수납러",
+            "육아맘",
+            "주부",
+            "학생",
+            "신혼부부",
+            "1인가구",
+            "싱글족",
+        }:
+            raise ValueError("Persona name must end with a person's name")
         return cleaned
 
 
