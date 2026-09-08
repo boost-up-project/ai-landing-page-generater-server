@@ -23,10 +23,28 @@ class LandingComponentSelection(StrictModel):
     image_values: list[EditableImage]
 
 
+class PersonaUXStrategy(StrictModel):
+    primary_context: str = ""
+    primary_value: str = ""
+    primary_problem: str = ""
+    relevant_topics: list[str] = Field(default_factory=list)
+    interaction_strategy: list[str] = Field(default_factory=list)
+    purchase_stage: Literal[
+        "awareness", "exploration", "consideration", "decision", "unknown"
+    ] = "unknown"
+    action_adjustments: list[str] = Field(default_factory=list)
+    exclusions: list[str] = Field(default_factory=list)
+    matched_combination_rules: list[str] = Field(default_factory=list)
+    component_strategy: list[str] = Field(default_factory=list)
+    copy_strategy: str = ""
+    unsupported_inferences: list[str] = Field(default_factory=list)
+
+
 class LandingPagePlan(StrictModel):
     persona_key: str
     ai_intent: str = Field(min_length=1, max_length=1000)
-    components: list[LandingComponentSelection] = Field(min_length=1)
+    ux_strategy: PersonaUXStrategy = Field(default_factory=PersonaUXStrategy)
+    components: list[LandingComponentSelection] = Field(default_factory=list)
 
 
 class LandingPlan(StrictModel):
@@ -67,6 +85,7 @@ class LandingPage(StrictModel):
     persona_key: str
     persona_name: str
     ai_intent: str
+    ux_strategy: PersonaUXStrategy = Field(default_factory=PersonaUXStrategy)
     header_components: list[LandingComponent] = Field(default_factory=list)
     components: list[LandingComponent]
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
@@ -126,6 +127,11 @@ class LandingService:
         templates = [item for item in all_templates if not _is_header_template(item)]
         if not templates:
             raise LandingStateError("At least one campaign body component is required")
+        if len(templates) < 3:
+            raise LandingStateError(
+                "At least three campaign body component templates are required "
+                "to compose five component instances"
+            )
         assets, asset_paths = _load_assets(campaign_dir / "assets")
         ikea_images = load_ikea_images(self._settings)
         personas = [
@@ -148,19 +154,32 @@ class LandingService:
             }
             for item in templates
         ]
-        plan = await self._parser.compose(
-            brand_context=_stage_markdown(
-                root, project_record, "brand", "current_brand_id", "brand.md"
-            ),
-            campaign_context=_stage_markdown(
-                root, project_record, "campaign", "current_campaign_id", "campaign.md"
-            ),
-            personas=personas,
-            components=component_manifest,
-            asset_filenames=[item.filename for item in assets],
-            ikea_context=ikea_prompt_context(ikea_images),
-            reference_context=_reference_layout_context(campaign_dir),
+        brand_context = _stage_markdown(
+            root, project_record, "brand", "current_brand_id", "brand.md"
         )
+        campaign_context = _stage_markdown(
+            root, project_record, "campaign", "current_campaign_id", "campaign.md"
+        )
+        page_plans = []
+        for persona in personas:
+            persona_plan = await self._parser.compose(
+                brand_context=brand_context,
+                campaign_context=campaign_context,
+                personas=[persona],
+                components=component_manifest,
+                asset_filenames=[item.filename for item in assets],
+                ikea_context=ikea_prompt_context(ikea_images),
+                reference_context=_reference_layout_context(campaign_dir),
+            )
+            if (
+                len(persona_plan.pages) != 1
+                or persona_plan.pages[0].persona_key != persona["persona_key"]
+            ):
+                raise AIParserError(
+                    "Each persona composition must return exactly its requested page"
+                )
+            page_plans.append(persona_plan.pages[0])
+        plan = LandingPlan(pages=page_plans)
         pages = _build_pages(
             plan,
             personas,
@@ -554,16 +573,21 @@ def _build_pages(
     template_map = {item.template_id: item for item in templates}
     persona_map = {item["persona_key"]: item for item in personas}
     image_pool = ikea_images or []
-    used_ikea_image_ids: set[str] = set()
     pages: list[LandingPage] = []
     for page_plan in plan.pages:
+        used_ikea_image_ids: set[str] = set()
         selected_ids = [selection.template_id for selection in page_plan.components]
-        expected_ids = [template.template_id for template in templates]
-        if len(selected_ids) != len(expected_ids) or set(selected_ids) != set(
-            expected_ids
-        ):
+        selection_counts = Counter(selected_ids)
+        if len(selected_ids) < 5:
             raise AIParserError(
-                "Landing plan must include every component template exactly once"
+                "Landing plan must contain at least five component instances"
+            )
+        unknown_ids = set(selection_counts) - set(template_map)
+        if unknown_ids:
+            raise AIParserError("Landing plan referenced an unknown component")
+        if any(count > 2 for count in selection_counts.values()):
+            raise AIParserError(
+                "Landing plan may use each component template at most twice"
             )
         components: list[LandingComponent] = []
         for selection in page_plan.components:
@@ -635,6 +659,7 @@ def _build_pages(
                 persona_key=page_plan.persona_key,
                 persona_name=str(persona["name"]),
                 ai_intent=page_plan.ai_intent,
+                ux_strategy=page_plan.ux_strategy,
                 header_components=header_components,
                 components=components,
             )

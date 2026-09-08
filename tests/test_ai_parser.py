@@ -10,8 +10,16 @@ from app.brand.ai_parser import (
 )
 from app.brand.schemas import BrandKnowledge
 from app.core.config import Settings
+from app.landing.ai_parser import PERSONA_UX_RULES
 
 from .test_brand_flow import make_knowledge
+
+
+def test_persona_ux_rules_separate_signals_from_ui_decisions() -> None:
+    assert "persona data → supported signal → UX decision" in PERSONA_UX_RULES
+    assert "profile → expression/readability" in PERSONA_UX_RULES
+    assert "purchase_journey → CTA readiness" in PERSONA_UX_RULES
+    assert "may appear zero, one, or two times" in PERSONA_UX_RULES
 
 
 def test_prompt_forbids_inference_but_allows_source_interpretation() -> None:

@@ -17,6 +17,11 @@ SYSTEM_PROMPT = (
     .read_text(encoding="utf-8")
     .strip()
 )
+PERSONA_UX_RULES = (
+    (Path(__file__).with_name("prompts") / "persona_ux_rules.md")
+    .read_text(encoding="utf-8")
+    .strip()
+)
 COPY_PROMPT = (
     (Path(__file__).with_name("prompts") / "copy.md")
     .read_text(encoding="utf-8")
@@ -55,6 +60,7 @@ class GeminiLandingParser:
             raise AIParserError("GEMINI_API_KEY is not configured")
         prompt = (
             f"{SYSTEM_PROMPT}\n\n"
+            f"[PERSONA_UX_DECISION_RULES]\n{PERSONA_UX_RULES}\n\n"
             f"[BRAND_CONTEXT]\n{brand_context}\n\n"
             f"[CAMPAIGN_CONTEXT]\n{campaign_context}\n\n"
             f"[PERSONAS]\n{json.dumps(personas, ensure_ascii=False)}\n\n"

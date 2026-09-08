@@ -20,6 +20,7 @@ from app.landing.schemas import (
     LandingPageUpdate,
     LandingPlan,
     LandingSaveRequest,
+    PersonaUXStrategy,
 )
 from app.landing.service import LandingService
 from app.main import app
@@ -34,15 +35,26 @@ from app.project.service import create_project_id, project_dir
 
 
 class FakeLandingParser:
-    async def compose(self, **_: object) -> LandingPlan:
+    async def compose(self, **kwargs: object) -> LandingPlan:
+        manifest = kwargs["components"]
+        assert isinstance(manifest, list)
+        selected = [manifest[index]["template_id"] for index in (0, 1, 2, 0, 1)]
         return LandingPlan(
             pages=[
                 LandingPagePlan(
                     persona_key="persona-a",
                     ai_intent="작게 시작할 수 있다는 메시지로 구매 부담을 낮췄습니다.",
+                    ux_strategy=PersonaUXStrategy(
+                        primary_context="작은 집을 꾸미는 첫 독립 상황",
+                        primary_value="예산 안에서 효율적인 공간 완성",
+                        primary_problem="선택지가 많아 생기는 결정 부담",
+                        interaction_strategy=["간결한 추천 경로"],
+                        component_strategy=["핵심 가치가 담긴 히어로를 먼저 배치"],
+                        copy_strategy="작게 시작할 수 있다는 실용적 표현",
+                    ),
                     components=[
                         LandingComponentSelection(
-                            template_id="component-1",
+                            template_id=template_id,
                             copy_values=["작은 변화로 시작하는 새로운 공간"],
                             image_values=[
                                 EditableImage(
@@ -50,7 +62,7 @@ class FakeLandingParser:
                                     alt="밝고 정돈된 거실",
                                 )
                             ],
-                        )
+                        ) for template_id in selected
                     ],
                 )
             ]
@@ -73,7 +85,7 @@ class HeaderAwareLandingParser(FakeLandingParser):
     async def compose(self, **kwargs: object) -> LandingPlan:
         components = kwargs["components"]
         assert isinstance(components, list)
-        template_id = components[0]["template_id"]
+        selected = [components[index]["template_id"] for index in (0, 1, 2, 0, 1)]
         return LandingPlan(
             pages=[
                 LandingPagePlan(
@@ -89,7 +101,7 @@ class HeaderAwareLandingParser(FakeLandingParser):
                                     alt="밝고 정돈된 거실",
                                 )
                             ],
-                        )
+                        ) for template_id in selected
                     ],
                 )
             ]
@@ -116,7 +128,7 @@ class AllComponentsLandingParser(FakeLandingParser):
                                 )
                             ],
                         )
-                        for item in components
+                        for item in [*components, *components[: max(0, 5 - len(components))]]
                     ],
                 )
             ]
@@ -124,7 +136,10 @@ class AllComponentsLandingParser(FakeLandingParser):
 
 
 class PartialLandingParser(FakeLandingParser):
-    async def compose(self, **_: object) -> LandingPlan:
+    async def compose(self, **kwargs: object) -> LandingPlan:
+        components = kwargs["components"]
+        assert isinstance(components, list)
+        selected = [components[index]["template_id"] for index in (0, 1, 2, 0, 1)]
         return LandingPlan(
             pages=[
                 LandingPagePlan(
@@ -132,10 +147,62 @@ class PartialLandingParser(FakeLandingParser):
                     ai_intent="AI가 일부 편집값만 반환했습니다.",
                     components=[
                         LandingComponentSelection(
-                            template_id="component-1",
+                            template_id=template_id,
                             copy_values=[],
                             image_values=[],
                         )
+                        for template_id in selected
+                    ],
+                )
+            ]
+        )
+
+
+class RepeatedComponentLandingParser(FakeLandingParser):
+    def __init__(self, count: int) -> None:
+        self.count = count
+
+    async def compose(self, **kwargs: object) -> LandingPlan:
+        components = kwargs["components"]
+        assert isinstance(components, list)
+        selected = [components[0]["template_id"]] * self.count
+        selected.extend([components[1]["template_id"]] * 2)
+        selected.extend([components[2]["template_id"]] * (5 - len(selected)))
+        return LandingPlan(
+            pages=[
+                LandingPagePlan(
+                    persona_key="persona-a",
+                    ai_intent="같은 템플릿을 서로 다른 역할로 반복합니다.",
+                    components=[
+                        LandingComponentSelection(
+                            template_id=template_id,
+                            copy_values=[f"맞춤 메시지 {index + 1}"],
+                            image_values=[],
+                        )
+                        for index, template_id in enumerate(selected)
+                    ],
+                )
+            ]
+        )
+
+
+class UnderfilledLandingParser(FakeLandingParser):
+    async def compose(self, **kwargs: object) -> LandingPlan:
+        components = kwargs["components"]
+        assert isinstance(components, list)
+        selected = [components[index]["template_id"] for index in (0, 1, 2, 0)]
+        return LandingPlan(
+            pages=[
+                LandingPagePlan(
+                    persona_key="persona-a",
+                    ai_intent="컴포넌트 수가 부족한 계획입니다.",
+                    components=[
+                        LandingComponentSelection(
+                            template_id=template_id,
+                            copy_values=[],
+                            image_values=[],
+                        )
+                        for template_id in selected
                     ],
                 )
             ]
@@ -163,6 +230,14 @@ def make_project(settings: Settings) -> str:
         '<h1 class="title" data-editable="copy">기존 제목</h1>'
         '<img class="kv" data-editable="image" src="old.png" alt="기존 이미지">'
         "</section>",
+        encoding="utf-8",
+    )
+    (root / "campaign" / campaign_id / "component" / "02_proof.html").write_text(
+        '<section data-component-name="근거"><p data-editable="copy">기존 근거</p></section>',
+        encoding="utf-8",
+    )
+    (root / "campaign" / campaign_id / "component" / "03_cta.html").write_text(
+        '<section data-component-name="CTA"><p data-editable="copy">기존 CTA</p></section>',
         encoding="utf-8",
     )
     (root / "campaign" / campaign_id / "assets" / "01_room.png").write_bytes(
@@ -219,6 +294,7 @@ async def test_landing_service_creates_persona_page_without_structure_changes(
     result = await service.create(project_id)
 
     assert result.pages[0].persona_name == "새 출발 민지"
+    assert result.pages[0].ux_strategy.primary_problem == "선택지가 많아 생기는 결정 부담"
     assert result.component_library[0].name == "히어로"
     html = result.pages[0].components[0].html
     assert '<h1 class="title" data-editable="copy">' in html
@@ -338,7 +414,7 @@ def test_apply_editable_values_preserves_safe_semantic_line_breaks() -> None:
 
 
 @pytest.mark.asyncio
-async def test_landing_plan_must_include_every_normalized_component(
+async def test_landing_plan_may_omit_normalized_components(
     tmp_path: Path,
 ) -> None:
     settings = Settings(storage_root=tmp_path)
@@ -356,9 +432,50 @@ async def test_landing_plan_must_include_every_normalized_component(
         'data-layout-options="source cards"><p data-editable="copy">기존 근거</p></section>',
         encoding="utf-8",
     )
+    (component_dir / "04_optional.html").write_text(
+        '<section data-component-name="선택 콘텐츠"><p data-editable="copy">선택</p></section>',
+        encoding="utf-8",
+    )
     service = LandingService(settings, parser=FakeLandingParser())
 
-    with pytest.raises(AIParserError, match="include every component template"):
+    result = await service.create(project_id)
+
+    selected_ids = [item.template_id for item in result.pages[0].components]
+    assert len(selected_ids) == 5
+    assert "component-4" not in selected_ids
+
+
+@pytest.mark.asyncio
+async def test_landing_plan_may_use_a_component_twice(tmp_path: Path) -> None:
+    settings = Settings(storage_root=tmp_path)
+    project_id = make_project(settings)
+    service = LandingService(settings, parser=RepeatedComponentLandingParser(2))
+
+    result = await service.create(project_id)
+
+    assert len(result.pages[0].components) == 5
+    assert result.pages[0].components[0].instance_id != result.pages[0].components[1].instance_id
+
+
+@pytest.mark.asyncio
+async def test_landing_plan_rejects_a_component_used_more_than_twice(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(storage_root=tmp_path)
+    project_id = make_project(settings)
+    service = LandingService(settings, parser=RepeatedComponentLandingParser(3))
+
+    with pytest.raises(AIParserError, match="at most twice"):
+        await service.create(project_id)
+
+
+@pytest.mark.asyncio
+async def test_landing_plan_requires_at_least_five_components(tmp_path: Path) -> None:
+    settings = Settings(storage_root=tmp_path)
+    project_id = make_project(settings)
+    service = LandingService(settings, parser=UnderfilledLandingParser())
+
+    with pytest.raises(AIParserError, match="at least five"):
         await service.create(project_id)
 
 
@@ -443,10 +560,11 @@ async def test_navigation_is_fixed_header_and_excluded_from_body_library(
 
     result = await service.create(project_id)
 
-    assert [item.name for item in result.component_library] == ["히어로"]
+    assert [item.name for item in result.component_library] == ["히어로", "근거", "CTA"]
     page = result.pages[0]
     assert [item.name for item in page.header_components] == ["공통 헤더"]
-    assert [item.name for item in page.components] == ["히어로"]
+    assert page.components[0].name == "히어로"
+    assert len(page.components) == 5
     exported = (
         tmp_path
         / "projects"
@@ -487,9 +605,9 @@ async def test_navigation_is_fixed_header_and_excluded_from_body_library(
 
     upgraded = service.get(result.landing_id)
 
-    assert [item.name for item in upgraded.component_library] == ["히어로"]
+    assert [item.name for item in upgraded.component_library] == ["히어로", "근거", "CTA"]
     assert [item.name for item in upgraded.pages[0].header_components] == ["공통 헤더"]
-    assert [item.name for item in upgraded.pages[0].components] == ["히어로"]
+    assert upgraded.pages[0].components[0].name == "히어로"
 
 
 @pytest.mark.asyncio
@@ -508,7 +626,7 @@ async def test_uploaded_project_header_is_fixed_when_campaign_has_no_header(
 
     result = await service.create(project_id)
 
-    assert [item.name for item in result.component_library] == ["히어로"]
+    assert [item.name for item in result.component_library] == ["히어로", "근거", "CTA"]
     page = result.pages[0]
     assert [item.name for item in page.header_components] == ["업로드 헤더"]
     assert [item.category for item in page.header_components] == ["navigation"]
@@ -595,7 +713,8 @@ async def test_header_root_component_is_fixed_even_without_navigation_category(
 
     page = result.pages[0]
     assert [item.name for item in page.header_components] == ["파일명 헤더"]
-    assert [item.name for item in page.components] == ["히어로"]
+    assert page.components[0].name == "히어로"
+    assert len(page.components) == 5
     exported = (
         tmp_path
         / "projects"
