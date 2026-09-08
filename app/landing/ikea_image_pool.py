@@ -115,6 +115,13 @@ def assign_ikea_images(
         return image_values
     assigned: list[EditableImage] = []
     for index, value in enumerate(image_values):
+        # A campaign asset explicitly selected by the composer is the user's source
+        # material. Keep it and use the IKEA pool only to fill otherwise empty slots.
+        if value.asset_filename and not value.asset_filename.startswith(
+            ("http://", "https://")
+        ):
+            assigned.append(value)
+            continue
         query = " ".join(
             [
                 component_name,

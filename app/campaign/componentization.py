@@ -44,6 +44,26 @@ _LEAF_TEXT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _IMAGE_TAG_PATTERN = re.compile(r"<img\b(?P<attrs>[^>]*)>", re.IGNORECASE)
+_VISUAL_PLACEHOLDER_PATTERN = re.compile(
+    r"<(?P<tag>div|figure)\b(?P<attrs>[^>]*)>", re.IGNORECASE | re.DOTALL
+)
+_CLASS_ATTRIBUTE_PATTERN = re.compile(
+    r"\bclass\s*=\s*(['\"])(?P<value>.*?)\1", re.IGNORECASE | re.DOTALL
+)
+_VISUAL_PLACEHOLDER_CLASSES = {
+    "art",
+    "hero",
+    "hero__media",
+    "thumb",
+    "visual",
+}
+_EDITABLE_BACKGROUND_RUNTIME_STYLES = """
+<style data-editable-background-runtime>
+[data-editable="image"][data-editable-role="background"][data-editable-image-src]::before,
+[data-editable="image"][data-editable-role="background"][data-editable-image-src]::after{content:none!important;display:none!important}
+[data-editable="image"][data-editable-role="background"][data-editable-image-src]>*{visibility:hidden!important}
+</style>
+""".strip()
 
 _SECTION_TAGS = {"header", "section", "article", "footer"}
 _VOID_TAGS = {
@@ -124,7 +144,7 @@ def split_components(
             continue
         name, category = _component_identity(fragment, base_name, index)
         decorated = _decorate_root(
-            _mark_editable_targets(
+            mark_editable_targets(
                 _rewrite_asset_urls(fragment, asset_names), category=category
             ),
             name=name,
@@ -294,7 +314,7 @@ def _rewrite_asset_urls(source: str, asset_names: dict[str, str]) -> str:
     return _ASSET_URL_PATTERN.sub(replace, source)
 
 
-def _mark_editable_targets(source: str, *, category: str) -> str:
+def mark_editable_targets(source: str, *, category: str) -> str:
     """Expose marketing text, CTA labels, and images from raw Figma HTML to the editor."""
     if category == "navigation":
         return source
@@ -337,9 +357,33 @@ def _mark_editable_targets(source: str, *, category: str) -> str:
         closing = " />" if self_closing else ">"
         return f'<img{normalized_attrs} data-editable="image"{closing}'
 
-    return _IMAGE_TAG_PATTERN.sub(
+    marked = _IMAGE_TAG_PATTERN.sub(
         replace_image, _LEAF_TEXT_PATTERN.sub(replace_text, source)
     )
+    root = _ROOT_TAG_PATTERN.search(marked)
+
+    def replace_visual_placeholder(match: re.Match[str]) -> str:
+        if root and match.start() == root.start():
+            return match.group(0)
+        attrs = match.group("attrs")
+        if "data-editable" in attrs.casefold():
+            return match.group(0)
+        class_match = _CLASS_ATTRIBUTE_PATTERN.search(attrs)
+        classes = set(class_match.group("value").split()) if class_match else set()
+        if not classes.intersection(_VISUAL_PLACEHOLDER_CLASSES):
+            return match.group(0)
+        return (
+            f'<{match.group("tag")}{attrs} data-editable="image" '
+            'data-editable-role="background">'
+        )
+
+    marked = _VISUAL_PLACEHOLDER_PATTERN.sub(replace_visual_placeholder, marked)
+    if (
+        'data-editable-role="background"' in marked
+        and "data-editable-background-runtime" not in marked
+    ):
+        marked = f"{marked}\n{_EDITABLE_BACKGROUND_RUNTIME_STYLES}"
+    return marked
 
 
 def _font_size(attributes: str) -> float:

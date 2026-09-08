@@ -413,6 +413,25 @@ def test_apply_editable_values_preserves_safe_semantic_line_breaks() -> None:
     )
 
 
+def test_apply_editable_values_fills_css_background_image_target() -> None:
+    from app.landing.html import apply_editable_values
+
+    source = (
+        '<div class="hero__media" data-editable="image" '
+        'data-editable-role="background"></div>'
+    )
+    html = apply_editable_values(
+        source,
+        [],
+        [EditableImage(asset_filename="https://www.ikea.com/room.jpg", alt="거실")],
+    )
+
+    assert 'data-editable-image-src="https://www.ikea.com/room.jpg"' in html
+    assert "background-image:url(&#x27;https://www.ikea.com/room.jpg&#x27;)" in html
+    assert "background-size:cover" in html
+    assert 'aria-label="거실"' in html
+
+
 @pytest.mark.asyncio
 async def test_landing_plan_may_omit_normalized_components(
     tmp_path: Path,
@@ -526,7 +545,7 @@ async def test_landing_assigns_ikea_metadata_image_urls_to_body_components(
         ),
         encoding="utf-8",
     )
-    service = LandingService(settings, parser=FakeLandingParser())
+    service = LandingService(settings, parser=PartialLandingParser())
 
     result = await service.create(project_id)
 
@@ -534,6 +553,84 @@ async def test_landing_assigns_ikea_metadata_image_urls_to_body_components(
     assert 'src="https://www.ikea.com/hero-room.jpg"' in html
     assert 'src="asset://https://www.ikea.com/hero-room.jpg"' not in html
     assert 'alt="IKEA living room gallery roomset"' in html
+
+
+@pytest.mark.asyncio
+async def test_landing_prefers_selected_campaign_asset_over_ikea_pool(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(storage_root=tmp_path)
+    project_id = make_project(settings)
+    upload_dir = tmp_path / "uploads"
+    upload_dir.mkdir(parents=True)
+    (upload_dir / "ikea_metadata_300_v2.json").write_text(
+        json.dumps(
+            [
+                {
+                    "id": "IKEA-HERO",
+                    "image": {
+                        "cdn_url": "https://www.ikea.com/hero-room.jpg",
+                        "alt_text": "Hero room",
+                        "context_text": "living room gallery roomset",
+                        "image_type": "roomset",
+                        "recommended_component": "hero",
+                    },
+                    "classification": {
+                        "room": "living_room",
+                        "category": "living_room_furniture",
+                    },
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    service = LandingService(settings, parser=FakeLandingParser())
+
+    result = await service.create(project_id)
+
+    html = result.pages[0].components[0].html
+    assert 'src="asset://01_room.png"' in html
+    assert "https://www.ikea.com/hero-room.jpg" not in html
+
+
+@pytest.mark.asyncio
+async def test_get_upgrades_existing_editable_background_runtime(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(storage_root=tmp_path)
+    project_id = make_project(settings)
+    service = LandingService(settings, parser=FakeLandingParser())
+    result = await service.create(project_id)
+    background_html = (
+        '<section data-component-name="Hero" data-component-category="hero">'
+        '<div class="hero__media" data-editable="image" '
+        'data-editable-role="background" '
+        'data-editable-image-src="https://www.ikea.com/room.jpg" '
+        'style="background-image:url(\'https://www.ikea.com/room.jpg\')"></div>'
+        "</section>"
+    )
+    library = [
+        result.component_library[0].model_copy(update={"html": background_html}),
+        *result.component_library[1:],
+    ]
+    first_page = result.pages[0]
+    components = [
+        first_page.components[0].model_copy(update={"html": background_html}),
+        *first_page.components[1:],
+    ]
+    service._save_record(
+        result.model_copy(
+            update={
+                "component_library": library,
+                "pages": [first_page.model_copy(update={"components": components})],
+            }
+        )
+    )
+
+    upgraded = service.get(result.landing_id)
+
+    assert "data-editable-background-runtime" in upgraded.component_library[0].html
+    assert "data-editable-background-runtime" in upgraded.pages[0].components[0].html
 
 
 @pytest.mark.asyncio
