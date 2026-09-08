@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 from pathlib import Path
@@ -39,6 +40,8 @@ IMAGE_ASPECT_RATIOS = {
     "16:9": "ASPECT_RATIO_SIXTEEN_BY_NINE",
     "21:9": "ASPECT_RATIO_TWENTY_ONE_BY_NINE",
 }
+LANDING_COMPOSE_MAX_RETRIES = 3
+RETRYABLE_GEMINI_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 
 
 class GeminiLandingParser:
@@ -78,21 +81,7 @@ class GeminiLandingParser:
                 "temperature": 0.35,
             },
         }
-        try:
-            async with httpx.AsyncClient(
-                base_url=self._settings.gemini_base_url.rstrip("/"),
-                timeout=self._settings.gemini_timeout_seconds,
-            ) as client:
-                response = await client.post(
-                    f"/models/{self._settings.gemini_model}:generateContent",
-                    headers={
-                        "x-goog-api-key": self._settings.gemini_api_key,
-                        "Content-Type": "application/json",
-                    },
-                    json=payload,
-                )
-        except httpx.HTTPError as exc:
-            raise AIParserError("Could not reach the Gemini API") from exc
+        response = await self._post_compose_with_retry(payload)
         if response.is_error:
             raise AIParserError(
                 f"Gemini API returned {response.status_code}: {response.text}"
@@ -103,6 +92,36 @@ class GeminiLandingParser:
             )
         except (ValueError, KeyError, TypeError, ValidationError) as exc:
             raise AIParserError("Gemini returned an invalid landing plan") from exc
+
+    async def _post_compose_with_retry(self, payload: dict[str, Any]) -> httpx.Response:
+        attempts = LANDING_COMPOSE_MAX_RETRIES + 1
+        last_error: httpx.HTTPError | None = None
+        async with httpx.AsyncClient(
+            base_url=self._settings.gemini_base_url.rstrip("/"),
+            timeout=self._settings.gemini_timeout_seconds,
+        ) as client:
+            for attempt in range(attempts):
+                try:
+                    response = await client.post(
+                        f"/models/{self._settings.gemini_model}:generateContent",
+                        headers={
+                            "x-goog-api-key": self._settings.gemini_api_key,
+                            "Content-Type": "application/json",
+                        },
+                        json=payload,
+                    )
+                except httpx.HTTPError as exc:
+                    last_error = exc
+                else:
+                    if (
+                        response.status_code not in RETRYABLE_GEMINI_STATUS_CODES
+                        or attempt == attempts - 1
+                    ):
+                        return response
+                if attempt < attempts - 1:
+                    await asyncio.sleep(2**attempt)
+
+        raise AIParserError("Could not reach the Gemini API after 3 retries") from last_error
 
     async def generate_copy_candidates(
         self,
