@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+from io import BytesIO
 from pathlib import Path
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import pymupdf
 import pytest
@@ -49,6 +51,16 @@ def make_pdf_bytes(text: str = "Campaign strategy source") -> bytes:
     content = document.tobytes()
     document.close()
     return content
+
+
+def make_component_zip() -> bytes:
+    output = BytesIO()
+    with ZipFile(output, "w", ZIP_DEFLATED) as archive:
+        archive.writestr("components/", b"")
+        archive.writestr("components/hero.html", "<section>Hero</section>")
+        archive.writestr("__MACOSX/components/._hero.html", b"\x00\xffAppleDouble")
+        archive.writestr("components/.DS_Store", b"\x00\xffmetadata")
+    return output.getvalue()
 
 
 class FakeCampaignParser:
@@ -385,6 +397,33 @@ def test_campaign_api_requires_exactly_one_pdf(tmp_path: Path) -> None:
 
     assert response.status_code == 422
     assert response.json()["detail"] == "Exactly one campaign strategy PDF is required"
+
+
+def test_campaign_api_accepts_zip_instead_of_individual_html(tmp_path: Path) -> None:
+    settings = Settings(storage_root=tmp_path)
+    project_id = make_project(settings)
+    service = CampaignService(
+        settings,
+        parser=FakeCampaignParser(make_campaign_knowledge()),
+    )
+    app.dependency_overrides[get_campaign_service] = lambda: service
+
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/campaigns",
+                files=[
+                    ("strategy_file", ("strategy.pdf", make_pdf_bytes(), "application/pdf")),
+                    ("bundle_files", ("components.zip", make_component_zip(), "application/zip")),
+                ],
+                data={"project_id": project_id},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 201
+    assert response.json()["bundle_files"] == ["components.zip"]
+    assert response.json()["component_files"] == ["01_Hero.html"]
 
 
 @pytest.mark.asyncio
