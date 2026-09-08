@@ -71,6 +71,7 @@ _LAYOUT_RUNTIME_STYLES = """
 [data-layout-variant="centered"]{text-align:center}
 [data-layout-variant="inline"]{display:flex;align-items:center;justify-content:space-between;gap:16px}
 [data-layout-variant="cards"]{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px}
+[data-component-category]:not(header){width:auto!important;margin-inline:46px}
 [data-layout-variant="compact"]{padding-top:24px!important;padding-bottom:24px!important}
 [data-layout-variant="spacious"]{padding-top:clamp(48px,8vw,120px)!important;padding-bottom:clamp(48px,8vw,120px)!important}
 @media(max-width:640px){[data-layout-variant="media-left"],[data-layout-variant="media-right"],[data-layout-variant="inline"]{display:block}}

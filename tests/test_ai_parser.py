@@ -26,7 +26,8 @@ def test_prompt_forbids_inference_but_allows_source_interpretation() -> None:
     assert "Do not use outside knowledge" in SYSTEM_PROMPT
     assert "Do not extend it" in SYSTEM_PROMPT
     assert "return an empty content string" in SYSTEM_PROMPT
-    assert 'separate parallel facts or rules with " / "' in SYSTEM_PROMPT
+    assert 'prefix every non-empty line with\n   the round bullet "• "' in SYSTEM_PROMPT
+    assert 'Never join\n   facts with " / "' in SYSTEM_PROMPT
     assert "never more than 400 characters" in SYSTEM_PROMPT
     assert "must not add a" in SYSTEM_PROMPT
     assert "every page" in SYSTEM_PROMPT

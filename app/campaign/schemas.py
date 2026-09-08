@@ -18,8 +18,9 @@ class SourceReference(StrictModel):
 class CampaignSection(StrictModel):
     content: str = Field(
         description=(
-            "Compact campaign strategy content supported by the source PDF; empty "
-            "when the source does not contain relevant information"
+            "Compact campaign strategy content supported by the source PDF; each "
+            "parallel fact is on its own line prefixed with the round bullet '• '; "
+            "empty when the source does not contain relevant information"
         )
     )
     source_references: list[SourceReference] = Field(
