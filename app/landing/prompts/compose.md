@@ -45,8 +45,10 @@ Rules:
     room scene in natural Korean. The server will select actual image URLs from the
     IKEA metadata pool after copy generation, so do not invent external image URLs.
 15. For only `Hero.html headings` that benefit from editorial rhythm, insert `\n` only at semantic phrase
-    boundaries. Use at most recommended_lines lines, keep each line compact, never split
-    an IKEA series name, and never return HTML tags. Example shape:
+    boundaries. A newline is a hard visual break: never insert it merely to fit an expected
+    width, never split a Korean word or grammatical ending, and never leave a one-word line
+    unless that word is an intentional product-name emphasis. Use at most recommended_lines
+    lines, keep each line compact, never split an IKEA series name, and never return HTML tags. Example shape:
     `복잡한 공간을\n말끔히 정리해 줄\nKALLAX`.
 16. Paragraphs should usually be one or two short lines. CTA labels must always stay on
     one line and contain no line break.

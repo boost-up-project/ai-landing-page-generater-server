@@ -413,6 +413,22 @@ def test_apply_editable_values_preserves_safe_semantic_line_breaks() -> None:
     )
 
 
+def test_apply_editable_values_removes_hard_breaks_from_body_copy() -> None:
+    from app.landing.html import apply_editable_values
+
+    source = '<p data-editable="copy">기존 본문</p>'
+    html = apply_editable_values(
+        source,
+        ["물건은 늘어나고\n공간은 부족할 때,\n가볍게 정돈해보세요."],
+        [],
+    )
+
+    assert html == (
+        '<p data-editable="copy">물건은 늘어나고 공간은 부족할 때, '
+        '가볍게 정돈해보세요.</p>'
+    )
+
+
 def test_apply_editable_values_fills_css_background_image_target() -> None:
     from app.landing.html import apply_editable_values
 

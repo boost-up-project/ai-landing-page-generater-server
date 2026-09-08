@@ -90,7 +90,11 @@ def apply_editable_values(
 
     def replace_copy(match: re.Match[str]) -> str:
         nonlocal copy_index
-        value = _render_copy_value(copy_values[copy_index])
+        value = _render_copy_value(
+            copy_values[copy_index],
+            preserve_line_breaks=match.group("tag").casefold()
+            in {"h1", "h2", "h3", "h4", "h5", "h6"},
+        )
         copy_index += 1
         return f"{match.group(1)}{value}{match.group(4)}"
 
@@ -211,12 +215,17 @@ def _strip_tags(value: str) -> str:
     return re.sub(r"<[^>]+>", " ", value)
 
 
-def _render_copy_value(value: str) -> str:
-    """Escape generated copy while preserving intentional semantic line breaks."""
+def _render_copy_value(value: str, *, preserve_line_breaks: bool) -> str:
+    """Escape copy, retaining hard breaks only for editorial headings."""
     normalized = re.sub(r"<br\s*/?>", "\n", value, flags=re.IGNORECASE)
+    normalized = normalized.replace("\r\n", "\n").replace("\r", "\n")
+    if not preserve_line_breaks:
+        return html_module.escape(
+            re.sub(r"\s+", " ", normalized).strip(), quote=False
+        )
     return "<br>".join(
         html_module.escape(line.strip(), quote=False)
-        for line in normalized.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        for line in normalized.split("\n")
     )
 
 
