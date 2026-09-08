@@ -354,6 +354,28 @@ def test_split_components_marks_small_campaign_news_as_editable_copy() -> None:
     assert 'data-editable-role="campaign"' in fragments[0].html
 
 
+def test_split_components_marks_css_visual_placeholders_as_editable_images() -> None:
+    fragments = split_components(
+        """
+        <section class="hero">
+          <div class="hero__copy"><h1>정돈된 공간</h1></div>
+          <div class="hero__media"><div class="hero__shape"></div></div>
+        </section>
+        <section class="carousel">
+          <article><div class="thumb"></div><h3>수납 아이디어</h3></article>
+        </section>
+        """,
+        "visual-components.html",
+    )
+
+    assert len(fragments) == 2
+    assert 'class="hero__media" data-editable="image"' in fragments[0].html
+    assert 'data-editable-role="background"' in fragments[0].html
+    assert "data-editable-background-runtime" in fragments[0].html
+    assert "data-editable-image-src]>*{visibility:hidden!important}" in fragments[0].html
+    assert 'class="thumb" data-editable="image"' in fragments[1].html
+
+
 def test_split_components_marks_class_styled_headings_and_paragraphs_as_copy() -> None:
     fragments = split_components(
         """

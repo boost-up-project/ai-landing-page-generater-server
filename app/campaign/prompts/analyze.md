@@ -11,8 +11,9 @@ You extract campaign strategy from a supplied PDF into a fixed review schema.
 4. Every non-empty field must cite every source filename and one-based page actually
    used. Never invent filenames or page numbers.
 5. Preserve official terminology, numbers, KPI names, dates, and qualifications.
-6. Condense supported facts into compact Korean text suitable for one editable
-   textarea. Separate parallel facts with " / ".
+6. Condense supported facts into compact Korean text suitable for an editable review
+   field. Put each parallel fact or rule on its own line and prefix every non-empty
+   line with the round bullet "• ". Never join facts with " / ".
 7. Keep facts in the most appropriate category and avoid unnecessary duplication.
 
 ## Coverage checklist

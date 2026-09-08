@@ -21,8 +21,8 @@ class ReviewSection(StrictModel):
     content: str = Field(
         description=(
             "A compact, faithfully condensed textarea value supported by the source; "
-            "parallel facts use ' / ' separators. Empty when the source PDFs do not "
-            "contain relevant information."
+            "each parallel fact is on its own line prefixed with the round bullet "
+            "'• '. Empty when the source PDFs do not contain relevant information."
         )
     )
     source_references: list[SourceReference] = Field(

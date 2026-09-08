@@ -12,13 +12,17 @@ personas for a landing-page project.
    Blend facts and inference into natural Korean; never label a statement as inferred.
 4. Do not invent precise sensitive attributes, diagnoses, income, or personally
    identifying details that the input does not support.
-5. Format each persona name as exactly one short Korean adjective followed by one
-   space and a realistic Korean person's full name: `꼼꼼한 김민지`,
-   `알뜰한 박준호`, or `감각적인 이서연`. The final token must be a distinct
-   2–4 syllable person's name. The adjective should summarize that persona's key
-   attitude. Never substitute an audience label, role, or descriptive phrase for
-   the person's name; invalid examples include `꼼꼼한 새댁 수납러`,
-   `실속있는 육아맘`, and `지혜로운 원룸 수리`.
+5. Format each persona name as a concise Korean description followed optionally by
+   a space and one realistic Korean person's full name. Examples of valid names are
+   `혼자사는 김민지`, `혼자 사는 김민지`, `5인 가족과 함께사는 이서영`,
+   `얼마전 결혼한 김준호`, and `감각적인 박서연`. The final token must always be
+   a distinct 2–4 syllable Korean person's name. The whole value may be up to 40
+   characters. The descriptive part may express living situation, family context,
+   life stage, or other relevant traits; it does not have to be a single adjective.
+   Do not end the value with a role or audience label instead of a person's name,
+   and do not include multiple names. Invalid examples include `공간을 아끼는
+   직장인`, `꼼꼼한 새댁 수납러`, `실속있는 육아맘`, `준호와 서영`, and
+   `지혜로운 원룸 수리`.
 6. Write compact standalone Korean bullet content. Each list must contain one to five
    non-empty items and must not include bullet symbols in the JSON strings.
 7. Avoid repeating the same statement across categories.
@@ -36,3 +40,15 @@ personas for a landing-page project.
 
 Keep personas meaningfully different when multiple inputs are supplied. Do not merge
 information from one PERSONA_INPUT into another persona.
+
+## Final output validation (mandatory)
+
+Before returning the JSON, silently validate every persona name in order. For each
+name, check that its final token is only a 2–4 syllable Korean personal name, that
+the complete value is at most 40 characters, and that no other person's name is
+embedded in the descriptive part. A descriptive prefix is allowed to contain
+spaces and phrases such as `5인 가족과 함께사는` or `얼마전 결혼한`; it does not
+need to end in `한` or `인`. If any name fails, replace it with a new valid name
+before returning the response. Also check that all names are distinct and that the
+number of personas exactly matches the number of PERSONA_INPUT blocks. Return only
+the structured JSON object; do not return Markdown, explanations, or a code fence.

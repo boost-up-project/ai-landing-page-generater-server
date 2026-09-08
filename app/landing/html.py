@@ -13,7 +13,8 @@ COPY_PATTERN = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 IMAGE_PATTERN = re.compile(
-    r"<img\b(?=[^>]*\bdata-editable\s*=\s*['\"]image['\"])[^>]*>",
+    r"<(?P<tag>img|div|figure)\b"
+    r"(?=[^>]*\bdata-editable\s*=\s*['\"]image['\"])[^>]*>",
     re.IGNORECASE | re.DOTALL,
 )
 ATTRIBUTE_PATTERN = re.compile(
@@ -45,8 +46,9 @@ def inspect_editable_targets(source: str) -> list[EditableTarget]:
     targets.extend(
         EditableTarget(
             kind="image",
-            current_value=_attribute(match.group(0), "src"),
-            role="image",
+            current_value=_image_source(match.group(0)),
+            role=_attribute(match.group(0), "data-editable-role") or "image",
+            tag=match.group("tag").casefold(),
         )
         for match in IMAGE_PATTERN.finditer(source)
     )
@@ -106,8 +108,10 @@ def apply_editable_values(
                 if value.asset_filename.startswith(("http://", "https://"))
                 else f"asset://{value.asset_filename}"
             )
-            tag = _set_attribute(tag, "src", source)
-        return _set_attribute(tag, "alt", value.alt)
+            tag = _set_image_source(tag, source)
+        if match.group("tag").casefold() == "img":
+            return _set_attribute(tag, "alt", value.alt)
+        return _set_attribute(tag, "aria-label", value.alt)
 
     return IMAGE_PATTERN.sub(replace_image, result)
 
@@ -121,7 +125,7 @@ def editable_image_defaults(source: str) -> list[EditableImage]:
     defaults: list[EditableImage] = []
     for match in IMAGE_PATTERN.finditer(source):
         tag = match.group(0)
-        source_value = _attribute(tag, "src")
+        source_value = _image_source(tag)
         defaults.append(
             EditableImage(
                 asset_filename=(
@@ -142,8 +146,9 @@ def editable_structure(source: str) -> str:
     normalized = COPY_PATTERN.sub(normalize_copy, source)
 
     def normalize_image(match: re.Match[str]) -> str:
-        tag = _set_attribute(match.group(0), "src", "__EDITABLE_IMAGE__")
-        return _set_attribute(tag, "alt", "__EDITABLE_ALT__")
+        tag = _set_image_source(match.group(0), "__EDITABLE_IMAGE__")
+        label = "alt" if match.group("tag").casefold() == "img" else "aria-label"
+        return _set_attribute(tag, label, "__EDITABLE_ALT__")
 
     return LAYOUT_VARIANT_ATTRIBUTE_PATTERN.sub(
         "", IMAGE_PATTERN.sub(normalize_image, normalized)
@@ -152,8 +157,36 @@ def editable_structure(source: str) -> str:
 
 def editable_image_sources(source: str) -> list[str]:
     return [
-        _attribute(match.group(0), "src") for match in IMAGE_PATTERN.finditer(source)
+        _image_source(match.group(0)) for match in IMAGE_PATTERN.finditer(source)
     ]
+
+
+def _image_source(tag: str) -> str:
+    return _attribute(tag, "src") or _attribute(tag, "data-editable-image-src")
+
+
+def _set_image_source(tag: str, source: str) -> str:
+    if tag.lstrip().casefold().startswith("<img"):
+        return _set_attribute(tag, "src", source)
+    updated = _set_attribute(tag, "data-editable-image-src", source)
+    style = _attribute(updated, "style")
+    declarations = [
+        item.strip()
+        for item in style.split(";")
+        if item.strip()
+        and not item.strip().casefold().startswith(
+            ("background-image:", "background-size:", "background-position:")
+        )
+    ]
+    safe_source = source.replace("\\", "\\\\").replace("'", "\\'")
+    declarations.extend(
+        [
+            f"background-image:url('{safe_source}')",
+            "background-size:cover",
+            "background-position:center",
+        ]
+    )
+    return _set_attribute(updated, "style", ";".join(declarations))
 
 
 def _set_attribute(tag: str, name: str, value: str) -> str:

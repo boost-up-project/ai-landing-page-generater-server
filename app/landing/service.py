@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 
 from app.brand.ai_parser import AIParserError
 from app.brand.service import _safe_filename, _write_bytes, _write_text
-from app.campaign.componentization import split_components
+from app.campaign.componentization import mark_editable_targets, split_components
 from app.core.config import Settings
 from app.landing.ai_parser import GeminiLandingParser
 from app.landing.html import (
@@ -223,7 +223,7 @@ class LandingService:
 
     def get(self, landing_id: str) -> LandingResponse:
         record = self._load_record(landing_id)
-        upgraded = _upgrade_legacy_header(record)
+        upgraded = _upgrade_editable_backgrounds(_upgrade_legacy_header(record))
         if upgraded == record:
             return record
         upgraded = upgraded.model_copy(
@@ -475,8 +475,9 @@ def _load_templates(component_dir: Path) -> list[ComponentTemplate]:
     template_index = 0
     for path in sorted(component_dir.glob("*.htm*")):
         source = path.read_text(encoding="utf-8")
+        _name, source_category = component_metadata(source, path.name)
         fragments = (
-            [source]
+            [mark_editable_targets(source, category=source_category)]
             if "data-component-name" in source
             else [fragment.html for fragment in split_components(source, path.name)]
         )
@@ -721,6 +722,47 @@ def _upgrade_legacy_header(record: LandingResponse) -> LandingResponse:
         )
     return record.model_copy(
         update={"component_library": body_library, "pages": pages}
+    )
+
+
+def _upgrade_editable_backgrounds(record: LandingResponse) -> LandingResponse:
+    """Add current editable-background behavior to landing drafts created earlier."""
+
+    def upgrade_template(template: ComponentTemplate) -> ComponentTemplate:
+        html = mark_editable_targets(template.html, category=template.category)
+        return template.model_copy(
+            update={
+                "html": html,
+                "editable_targets": inspect_editable_targets(html),
+            }
+        )
+
+    def upgrade_component(component: LandingComponent) -> LandingComponent:
+        return component.model_copy(
+            update={
+                "html": mark_editable_targets(
+                    component.html, category=component.category
+                )
+            }
+        )
+
+    return record.model_copy(
+        update={
+            "component_library": [
+                upgrade_template(template) for template in record.component_library
+            ],
+            "pages": [
+                page.model_copy(
+                    update={
+                        "components": [
+                            upgrade_component(component)
+                            for component in page.components
+                        ]
+                    }
+                )
+                for page in record.pages
+            ],
+        }
     )
 
 
