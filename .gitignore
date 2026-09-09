@@ -22,4 +22,6 @@ storage/generated/*
 storage/projects/*
 
 !storage/uploads/.gitkeep
+!storage/uploads/header.html
+!storage/uploads/ikea_metadata_300_v2.json
 !storage/generated/.gitkeep
